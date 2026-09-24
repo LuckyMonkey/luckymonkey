@@ -1,0 +1,1057 @@
+export interface Position {
+  x: number
+  y: number
+  height?: number
+  isLagoon?: boolean
+  isWaterfall?: boolean
+}
+
+export interface TileData {
+  x: number
+  y: number
+  type: number
+  height: number
+  isWaterfall?: boolean
+  isLagoon?: boolean
+}
+
+export interface ChunkData {
+  id: string
+  center: Position
+  tiles: TileData[]
+  priority: number // Higher priority chunks load first
+}
+
+export interface NodeData {
+  id: string
+  name: string
+  type: string
+  ipAddress: string
+  emoji: string
+  description: string
+  position: Position
+  connections?: string[]
+  status?: "online" | "offline" | "unstable" | "erupting"
+  securityLevel?: number
+  assets?: string[]
+}
+
+export interface WorldData {
+  meta: {
+    seed: number
+    biome: string
+    lastUpdated: string
+  }
+  chunks: ChunkData[]
+  nodes: NodeData[]
+  rivers: Position[]
+  decorations: {
+    type: string
+    position: Position
+  }[]
+}
+
+// Update river generation to ensure it flows from top to bottom with proper features
+function generateRiverSystem(): Position[] {
+  const riverPositions: Position[] = []
+
+  // Extended main river trunk - from top to bottom with more bends
+  const riverPath = [
+    // Start at the very top (waterfall section)
+    { x: 20, y: -5, height: 5, isWaterfall: true },
+    { x: 20, y: -4, height: 5, isWaterfall: true },
+    { x: 20, y: -3, height: 4, isWaterfall: true },
+    { x: 20, y: -2, height: 4, isWaterfall: true },
+    { x: 20, y: -1, height: 3, isWaterfall: true },
+    { x: 20, y: 0, height: 3, isWaterfall: true },
+    { x: 20, y: 1, height: 2, isWaterfall: true },
+    { x: 20, y: 2, height: 2, isWaterfall: true },
+    { x: 20, y: 3, height: 1, isWaterfall: true },
+    { x: 20, y: 4, height: 1, isWaterfall: true },
+    { x: 20, y: 5, height: 0 },
+    { x: 20, y: 6, height: 0 },
+
+    // Continue straight down
+    { x: 20, y: 7, height: 0 },
+    { x: 20, y: 8, height: 0 },
+    { x: 20, y: 9, height: 0 },
+
+    // First bend to the right
+    { x: 21, y: 10, height: 0 },
+    { x: 22, y: 11, height: 0 },
+    { x: 23, y: 12, height: 0 },
+    { x: 24, y: 13, height: 0 },
+    { x: 25, y: 14, height: 0 },
+
+    // Continue down
+    { x: 25, y: 15, height: 0 },
+    { x: 25, y: 16, height: 0 },
+    { x: 25, y: 17, height: 0 },
+
+    // Second bend to the left
+    { x: 24, y: 18, height: 0 },
+    { x: 23, y: 19, height: 0 },
+    { x: 22, y: 20, height: 0 },
+    { x: 21, y: 21, height: 0 },
+    { x: 20, y: 22, height: 0 },
+
+    // Continue down
+    { x: 20, y: 23, height: 0 },
+    { x: 20, y: 24, height: 0 },
+    { x: 20, y: 25, height: 0 },
+    { x: 20, y: 26, height: 0 },
+    { x: 20, y: 27, height: 0 },
+    { x: 20, y: 28, height: 0 },
+    { x: 20, y: 29, height: 0 },
+    { x: 20, y: 30, height: 0 },
+
+    // Third bend to the right
+    { x: 21, y: 31, height: 0 },
+    { x: 22, y: 32, height: 0 },
+    { x: 23, y: 33, height: 0 },
+    { x: 24, y: 34, height: 0 },
+    { x: 25, y: 35, height: 0 },
+    { x: 26, y: 36, height: 0 },
+    { x: 27, y: 37, height: 0 },
+    { x: 28, y: 38, height: 0 },
+    
+    // Continue down to delta
+    { x: 28, y: 39, height: 0 },
+    { x: 28, y: 40, height: 0 },
+    { x: 28, y: 41, height: 0 },
+    { x: 28, y: 42, height: 0 },
+    { x: 28, y: 43, height: 0 },
+    { x: 28, y: 44, height: 0 },
+    { x: 28, y: 45, height: 0 },
+  ]
+
+  // Add the main river path
+  riverPath.forEach((point) => {
+    // Add the center point
+    riverPositions.push(point)
+
+    // Add width to the river (1 tile on each side)
+    riverPositions.push({ ...point, x: point.x - 1 })
+    riverPositions.push({ ...point, x: point.x + 1 })
+  })
+
+  // Create a lagoon near position (17, 7)
+  const lagoonCenterX = 17
+  const lagoonCenterY = 7
+  const lagoonRadius = 4
+
+  for (let dx = -lagoonRadius; dx <= lagoonRadius; dx++) {
+    for (let dy = -lagoonRadius; dy <= lagoonRadius; dy++) {
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      if (distance <= lagoonRadius) {
+        riverPositions.push({
+          x: lagoonCenterX + dx,
+          y: lagoonCenterY + dy,
+          height: 0,
+          isLagoon: true,
+        })
+      }
+    }
+  }
+
+  // Connect lagoon to main river
+  const lagoonConnection = [
+    { x: 17, y: 7, height: 0 },
+    { x: 18, y: 7, height: 0 },
+    { x: 19, y: 7, height: 0 },
+    { x: 20, y: 7, height: 0 },
+  ]
+
+  lagoonConnection.forEach((point) => {
+    riverPositions.push(point)
+  })
+
+  // Create a smaller lagoon near the Digital River node (position 7, 12)
+  const smallLagoonX = 7
+  const smallLagoonY = 12
+  const smallLagoonRadius = 3
+
+  for (let dx = -smallLagoonRadius; dx <= smallLagoonRadius; dx++) {
+    for (let dy = -smallLagoonRadius; dy <= smallLagoonRadius; dy++) {
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      if (distance <= smallLagoonRadius) {
+        riverPositions.push({
+          x: smallLagoonX + dx,
+          y: smallLagoonY + dy,
+          height: 0,
+          isLagoon: true,
+        })
+      }
+    }
+  }
+
+  // Connect the small lagoon to the main river
+  const smallLagoonConnection = [
+    { x: 7, y: 12, height: 0 },
+    { x: 8, y: 12, height: 0 },
+    { x: 9, y: 12, height: 0 },
+    { x: 10, y: 12, height: 0 },
+    { x: 11, y: 12, height: 0 },
+    { x: 12, y: 12, height: 0 },
+    { x: 13, y: 12, height: 0 },
+    { x: 14, y: 12, height: 0 },
+    { x: 15, y: 12, height: 0 },
+    { x: 16, y: 12, height: 0 },
+    { x: 17, y: 12, height: 0 },
+    { x: 18, y: 12, height: 0 },
+    { x: 19, y: 12, height: 0 },
+    { x: 20, y: 12, height: 0 },
+    { x: 21, y: 12, height: 0 },
+    { x: 22, y: 12, height: 0 },
+    { x: 23, y: 12, height: 0 },
+  ]
+
+  smallLagoonConnection.forEach((point) => {
+    riverPositions.push(point)
+  })
+
+  // Remove duplicates
+  const uniquePositions = new Map<string, Position>()
+  riverPositions.forEach((pos) => {
+    const key = `${pos.x},${pos.y}`
+    uniquePositions.set(key, pos)
+  })
+
+  return Array.from(uniquePositions.values())
+}
+
+// Update decoration generation to be biome-aware
+function generateLushDecorations(): { type: string; position: Position }[] {
+  const decorations: { type: string; position: Position }[] = []
+
+  // Define biome areas
+  const biomes = [
+    { name: "volcano", center: { x: 8, y: 8 }, radius: 6 },
+    { name: "lagoon", center: { x: 17, y: 7 }, radius: 5 },
+    { name: "small_lagoon", center: { x: 7, y: 12 }, radius: 4 },
+    { name: "temple", center: { x: 17, y: 17 }, radius: 5 },
+    { name: "river", path: generateRiverSystem(), buffer: 3 },
+  ]
+
+  // Function to determine biome at a position
+  const getBiomeAt = (x: number, y: number): string => {
+    // Check circular biomes
+    for (const biome of biomes) {
+      if (biome.name !== "river" && "center" in biome) {
+        const center = biome.center as { x: number; y: number }
+        const distance = Math.sqrt(Math.pow(x - center.x, 2) + Math.pow(y - center.y, 2))
+        if (distance <= biome.radius) {
+          return biome.name
+        }
+      }
+    }
+
+    // Check river biome
+    const riverBiome = biomes.find((b) => b.name === "river")
+    if (riverBiome && "path" in riverBiome) {
+      const path = riverBiome.path as Position[]
+      const buffer = riverBiome.buffer as number
+
+      for (const point of path) {
+        const distance = Math.sqrt(Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2))
+        if (distance <= buffer) {
+          return "river"
+        }
+      }
+    }
+
+    return "default"
+  }
+
+  // Add biome-specific decorations
+  for (let x = 0; x < 40; x += 1) {
+    // Increased density by reducing step size
+    for (let y = 0; y < 40; y += 1) {
+      // Increased density by reducing step size
+      const biome = getBiomeAt(x, y)
+
+      // Skip decorations directly on water
+      const isOnRiver = biomes.find((b) => b.name === "river")?.path.some((p) => p.x === x && p.y === y)
+
+      if (isOnRiver) continue
+
+      // Add biome-specific decorations with some randomness
+      if (Math.random() < 0.3) {
+        // Increased probability for more decorations
+        let decorationType = "flower"
+        let height = 0
+
+        switch (biome) {
+          case "volcano":
+            decorationType = Math.random() < 0.7 ? "crystal" : "rock"
+            height = Math.floor(Math.random() * 3)
+            break
+          case "lagoon":
+          case "small_lagoon":
+            decorationType = Math.random() < 0.6 ? "lotus" : "flower"
+            break
+          case "temple":
+            decorationType = Math.random() < 0.6 ? "bamboo" : "tree"
+            break
+          case "river":
+            decorationType = Math.random() < 0.7 ? "flower" : "bush"
+            break
+          default:
+            decorationType = ["tree", "bush", "flower", "bamboo", "mushroom"][Math.floor(Math.random() * 5)]
+        }
+
+        decorations.push({
+          type: decorationType,
+          position: { x, y, height },
+        })
+      }
+    }
+  }
+
+  // Add specific decorations around volcano
+  const volcanoCenter = biomes.find((b) => b.name === "volcano")?.center as { x: number; y: number }
+  for (let i = 0; i < 20; i++) {
+    // More decorations
+    const angle = (i / 20) * Math.PI * 2
+    const distance = 3 + Math.random() * 2
+    const x = Math.round(volcanoCenter.x + Math.cos(angle) * distance)
+    const y = Math.round(volcanoCenter.y + Math.sin(angle) * distance)
+
+    decorations.push({
+      type: "crystal",
+      position: { x, y, height: Math.floor(Math.random() * 3) + 1 },
+    })
+  }
+
+  // Add more trees along the river
+  const riverPath = biomes.find((b) => b.name === "river")?.path as Position[]
+  for (let i = 0; i < riverPath.length; i += 2) {
+    // More frequent decorations
+    const point = riverPath[i]
+
+    // Add trees on both sides of the river
+    for (let side = -1; side <= 1; side += 2) {
+      if (Math.random() < 0.8) {
+        // Higher probability
+        decorations.push({
+          type: Math.random() < 0.7 ? "tree" : "bush",
+          position: { x: point.x + side * 2, y: point.y, height: 0 },
+        })
+      }
+    }
+  }
+
+  return decorations
+}
+
+// Define the nodes with updated positions to connect to rivers
+const allNodes = [
+  // Original nodes with updated positions
+  {
+    id: "monkey-statue",
+    name: "Lucky Monkey Guardian",
+    type: "monkey",
+    ipAddress: "192.168.1.1",
+    emoji: "🐵",
+    description: "The Guardian Construct. A memetic security avatar that protects the network. Approach with caution.",
+    position: { x: 17, y: 17, height: 5 }, // Increased height for temple pyramid
+    connections: ["logical-lagoon", "banana-sector", "node-temple-1", "volcano-core"],
+    status: "online",
+    securityLevel: 5,
+    assets: ["guardian_protocol.bin", "security_matrix.dat", "memetic_defense_v3.sys", "avatar_config.json"],
+  },
+  {
+    id: "logical-lagoon",
+    name: "Logical Lagoon API",
+    type: "river",
+    ipAddress: "192.168.1.42",
+    emoji: "🌊",
+    description: "A sacred API pool where memory fragments drift like lotus petals. Home to bytefish and static frogs.",
+    position: { x: 17, y: 7, height: 0 },
+    connections: ["monkey-statue", "digital-river"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["api_endpoints.json", "memory_fragments.dat", "lotus_protocol.bin", "static_frog.gif"],
+  },
+  {
+    id: "digital-river",
+    name: "Digital River Stream",
+    type: "river",
+    ipAddress: "192.168.1.101",
+    emoji: "🌊",
+    description: "Channels raw signal through the jungle. Its rapids form when external pings overload the stream.",
+    position: { x: 7, y: 12, height: 0 },
+    connections: ["logical-lagoon", "crashed-sector"],
+    status: "online",
+    securityLevel: 2,
+    assets: ["stream_flow.dat", "signal_patterns.bin", "ping_monitor.log", "rapids_config.json"],
+  },
+  {
+    id: "banana-sector",
+    name: "Banana Sector Cache",
+    type: "banana-cache",
+    ipAddress: "192.168.1.99",
+    emoji: "🍌",
+    description: "A playful but volatile subgrid where corrupted metadata manifests in humorous, unstable objects.",
+    position: { x: 27, y: 27, height: 0 },
+    connections: ["monkey-statue", "node-temple-2"],
+    status: "unstable",
+    securityLevel: 1,
+    assets: ["corrupted_metadata.bin", "unstable_objects.dat", "humor_algorithm.js", "banana_manifest.json"],
+  },
+  {
+    id: "node-temple-1",
+    name: "Node Temple Alpha",
+    type: "temple",
+    ipAddress: "10.0.0.1",
+    emoji: "🏯",
+    description:
+      "Ancient structure that predates the current grid. Maintained by Ghostpackets, semi-aware maintenance protocols.",
+    position: { x: 12, y: 27, height: 0 },
+    connections: ["monkey-statue", "crashed-sector"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["ancient_code.bin", "ghostpacket_protocol.dat", "maintenance_routines.sys", "temple_history.txt"],
+  },
+  {
+    id: "node-temple-2",
+    name: "Node Temple Beta",
+    type: "temple",
+    ipAddress: "10.0.0.2",
+    emoji: "🏯",
+    description:
+      "Ancient structure with mysterious origins. Contains a Hash of Belief required to access deeper sectors.",
+    position: { x: 27, y: 12, height: 0 },
+    connections: ["banana-sector", "server-hub"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["hash_of_belief.key", "mysterious_origins.log", "deeper_sector_map.dat", "ancient_symbols.svg"],
+  },
+  {
+    id: "crashed-sector",
+    name: "Crashed Sector 404",
+    type: "server",
+    ipAddress: "192.168.1.404",
+    emoji: "💻",
+    description: "A barren dead zone filled with 404 skeletons and server husks. Haunted by Ghostpackets.",
+    position: { x: 7, y: 27, height: 0 },
+    connections: ["node-temple-1", "digital-river"],
+    status: "offline",
+    securityLevel: 0,
+    assets: ["404_error_log.txt", "server_husks.dat", "ghostpacket_traces.bin", "crash_report.json"],
+  },
+  {
+    id: "server-hub",
+    name: "Server Hub Cluster",
+    type: "server",
+    ipAddress: "192.168.1.200",
+    emoji: "💻",
+    description:
+      "A cluster of ancient servers processing unknown data. The terminals occasionally display cryptic messages.",
+    position: { x: 37, y: 17, height: 0 },
+    connections: ["node-temple-2"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["unknown_data.bin", "cryptic_messages.log", "terminal_output.txt", "processing_algorithms.js"],
+  },
+  {
+    id: "main-router",
+    name: "メインルーター Router",
+    type: "router",
+    ipAddress: "192.168.0.1",
+    emoji: "📡",
+    description:
+      "Central routing node that manages all network traffic. Elevated position provides optimal signal distribution.",
+    position: { x: 21, y: 21, height: 4 },
+    connections: ["monkey-statue", "firewall-north", "firewall-south"],
+    status: "online",
+    securityLevel: 5,
+    assets: ["routing_table.dat", "network_traffic.log", "signal_distribution.bin", "router_config.json"],
+  },
+  {
+    id: "firewall-north",
+    name: "北ファイアウォール Firewall",
+    type: "firewall",
+    ipAddress: "192.168.0.10",
+    emoji: "🔥",
+    description:
+      "Northern security barrier that filters incoming traffic. Runs on ancient code that nobody fully understands.",
+    position: { x: 31, y: 6, height: 3 },
+    connections: ["main-router", "database-cluster"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["filter_rules.dat", "ancient_code.bin", "traffic_logs.txt", "security_protocols.json"],
+  },
+  {
+    id: "firewall-south",
+    name: "南ファイアウォール Firewall",
+    type: "firewall",
+    ipAddress: "192.168.0.11",
+    emoji: "🔥",
+    description:
+      "Southern security barrier with additional encryption layers. Frequently targeted by digital predators.",
+    position: { x: 6, y: 31, height: 2 },
+    connections: ["main-router"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["encryption_keys.dat", "predator_logs.txt", "defense_patterns.bin", "security_breach_history.json"],
+  },
+  {
+    id: "database-cluster",
+    name: "データベース Database",
+    type: "database",
+    ipAddress: "192.168.0.50",
+    emoji: "🗄️",
+    description:
+      "Massive storage facility containing all historical records. Access requires multiple authentication factors.",
+    position: { x: 36, y: 36, height: 0 },
+    connections: ["firewall-north"],
+    status: "online",
+    securityLevel: 5,
+    assets: ["historical_records.db", "authentication_factors.dat", "storage_index.bin", "access_logs.txt"],
+  },
+  {
+    id: "volcano-core",
+    name: "Volcano Core Processor",
+    type: "volcano",
+    ipAddress: "192.168.1.666",
+    emoji: "🌋",
+    description:
+      "A dangerous but powerful processing center built inside an active digital volcano. Processes data at extreme speeds but occasionally erupts, causing system-wide instabilities.",
+    position: { x: 8, y: 8, height: 7 },
+    connections: ["monkey-statue"],
+    status: "erupting",
+    securityLevel: 4,
+    assets: ["magma_cooling.sys", "eruption_schedule.dat", "heat_resistant_protocols.bin", "lava_flow_control.json"],
+  },
+
+  // New nodes with positions adjusted to be near rivers
+  {
+    id: "ai-core-01",
+    name: "Neural Processor Alpha",
+    type: "ai-core",
+    ipAddress: "10.0.1.42",
+    emoji: "🧠",
+    description:
+      "Advanced neural network processor that handles complex pattern recognition and decision-making tasks.",
+    position: { x: 25, y: 25, height: 2 },
+    connections: ["monkey-statue", "vault-01"],
+    status: "online",
+    securityLevel: 5,
+    assets: ["neural_index.bin", "thought_patterns.dat", "simulation_core.sys"],
+  },
+  {
+    id: "vault-01",
+    name: "Backup Vault Node",
+    type: "vault",
+    ipAddress: "10.0.0.3",
+    emoji: "🧱",
+    description:
+      "Secure storage facility for critical system backups and recovery data. Protected by multiple encryption layers.",
+    position: { x: 30, y: 15, height: 1 },
+    connections: ["ai-core-01", "firewall-01"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["system_snapshot.bin", "recovery_logic.dat", "archive_index.sys"],
+  },
+  {
+    id: "switch-01",
+    name: "Junction Switch",
+    type: "switch",
+    ipAddress: "10.0.0.2",
+    emoji: "🔀",
+    description: "Network traffic control point that routes data packets between different sectors of the system.",
+    position: { x: 20, y: 30, height: 0 },
+    connections: ["firewall-01", "banana-cache-01"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["routing_table.bin", "connection_map.dat", "signal_logs.sys"],
+  },
+  {
+    id: "banana-cache-01",
+    name: "Humor Cache Alpha",
+    type: "banana-cache",
+    ipAddress: "10.0.0.4",
+    emoji: "🍌",
+    description:
+      "Storage node for entertainment subroutines and humor algorithms. Often glitches in unpredictable ways.",
+    position: { x: 35, y: 20, height: 0 },
+    connections: ["switch-01", "terminal-01"],
+    status: "unstable",
+    securityLevel: 2,
+    assets: ["meme_collection.bin", "joke_database.dat", "banana_manifest.sys"],
+  },
+  {
+    id: "terminal-01",
+    name: "Legacy Terminal",
+    type: "terminal",
+    ipAddress: "10.0.0.5",
+    emoji: "💻",
+    description:
+      "Ancient access point to the system core. Uses outdated command syntax but has deep system privileges.",
+    position: { x: 15, y: 35, height: 0 },
+    connections: ["banana-cache-01"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["command_history.log", "bootword_list.dat", "access_codes.sys"],
+  },
+  {
+    id: "quantum-nexus",
+    name: "Quantum Nexus Core",
+    type: "server",
+    ipAddress: "192.168.q.∞",
+    emoji: "⚛️",
+    description:
+      "Experimental quantum computing node that exists in multiple states simultaneously. Calculations performed here may have different results each time they're observed.",
+    position: { x: 8, y: 27, height: 2 },
+    connections: ["node-temple-1"],
+    status: "unstable",
+    securityLevel: 5,
+    assets: [
+      "quantum_states.dat",
+      "superposition_matrix.bin",
+      "observation_effects.log",
+      "uncertainty_calculations.js",
+    ],
+  },
+  {
+    id: "data-archive",
+    name: "Ancient Data Archive",
+    type: "database",
+    ipAddress: "10.0.1.42",
+    emoji: "📚",
+    description:
+      "Repository of forgotten code and lost algorithms. The oldest data dates back to the pre-digital era, somehow preserved in binary form.",
+    position: { x: 38, y: 24, height: 1 },
+    connections: ["banana-sector"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["forgotten_code.bin", "lost_algorithms.dat", "pre_digital_artifacts.sys", "binary_preservation.log"],
+  },
+  {
+    id: "lizard-node",
+    name: "Reptile Protocol",
+    type: "lizard",
+    ipAddress: "10.0.2.42",
+    emoji: "🦎",
+    description:
+      "Cold-blooded system monitor that conserves energy while maintaining vigilance. Specializes in detecting anomalies in data patterns.",
+    position: { x: 14, y: 14, height: 0 },
+    connections: ["monkey-statue", "digital-river"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["cold_blood.bin", "scale_pattern.dat", "sun_basking.sys"],
+  },
+]
+
+function generateVolcano(): TileData[] {
+  const volcanoTiles: TileData[] = []
+  const centerX = 8
+  const centerY = 8
+  const baseRadius = 6
+
+  for (let x = centerX - baseRadius - 2; x <= centerX + baseRadius + 2; x++) {
+    for (let y = centerY - baseRadius - 2; y <= centerY + baseRadius + 2; y++) {
+      const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2))
+
+      if (distance <= baseRadius) {
+        // Inner volcano - higher elevation
+        const height = Math.max(0, 7 - Math.floor(distance / 2)) // Adjust height calculation
+        volcanoTiles.push({ x, y, type: 6, height }) // Type 6 for volcano
+      } else if (distance <= baseRadius + 2) {
+        // Outer rim - lower elevation
+        const height = Math.max(0, 2 - Math.floor((distance - baseRadius) * 2)) // Adjust height calculation
+        volcanoTiles.push({ x, y, type: 5, height }) // Type 5 for scorched earth
+      }
+    }
+  }
+
+  return volcanoTiles
+}
+
+// Generate only the necessary chunks for the floating river and nodes
+function generateMinimalChunks(): ChunkData[] {
+  const chunks: ChunkData[] = []
+  const chunkMap = new Map<string, TileData[]>()
+  const chunkSize = 5
+  const riverPositions = generateRiverSystem()
+  const volcanoTiles = generateVolcano()
+
+  // Function to add a tile to a chunk
+  const addTileToChunk = (tile: TileData) => {
+    const chunkX = Math.floor(tile.x / chunkSize)
+    const chunkY = Math.floor(tile.y / chunkSize)
+    const chunkKey = `chunk-${chunkX}-${chunkY}`
+
+    if (!chunkMap.has(chunkKey)) {
+      chunkMap.set(chunkKey, [])
+    }
+
+    chunkMap.get(chunkKey)!.push(tile)
+  }
+
+  // Add river tiles
+  riverPositions.forEach((pos) => {
+    addTileToChunk({
+      x: pos.x,
+      y: pos.y,
+      type: 1, // Water type
+      height: pos.height || 0,
+      isWaterfall: pos.isWaterfall,
+      isLagoon: pos.isLagoon,
+    })
+  })
+
+  // Add volcano tiles
+  volcanoTiles.forEach((tile) => {
+    addTileToChunk(tile)
+  })
+
+  // Add platform tiles around nodes
+  allNodes.forEach((node) => {
+    // Determine platform radius based on node type
+    let radius = 1 // Smaller radius for most nodes
+    let tileType = 4 // Default platform type
+
+    if (node.type === "volcano") {
+      radius = 3 // Larger platform for volcano
+      tileType = 6 // Volcano type
+    } else if (node.type === "monkey") {
+      radius = 3 // Larger platform for monkey statue
+      tileType = 7 // Golden temple type
+    } else if (node.type === "ai-core" || node.type === "temple") {
+      radius = 2 // Medium platform for important nodes
+    }
+
+    // Generate platform tiles
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        if (distance <= radius) {
+          addTileToChunk({
+            x: node.position.x + dx,
+            y: node.position.y + dy,
+            type: tileType,
+            height: node.position.height || 0,
+          })
+        }
+      }
+    }
+
+    // Add minimal padding around nodes
+    const paddingRadius = 2
+    for (let dx = -radius - paddingRadius; dx <= radius + paddingRadius; dx++) {
+      for (let dy = -radius - paddingRadius; dy <= radius + paddingRadius; dy++) {
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        if (distance > radius && distance <= radius + paddingRadius) {
+          // Only add padding if not already a platform tile
+          addTileToChunk({
+            x: node.position.x + dx,
+            y: node.position.y + dy,
+            type: 0, // Grass
+            height: Math.max(0, Math.floor((node.position.height || 0) * 0.5)),
+          })
+        }
+      }
+    }
+  })
+
+  // Create golden temple pyramid for monkey statue
+  const centerX = 17
+  const centerY = 17
+  const pyramidHeight = 5
+  const pyramidSize = 5
+
+  for (let layer = 0; layer < pyramidHeight; layer++) {
+    const layerSize = pyramidSize - layer
+
+    for (let dx = -layerSize; dx <= layerSize; dx++) {
+      for (let dy = -layerSize; dy <= layerSize; dy++) {
+        // Make it more pyramid-like by reducing the corners
+        if (Math.abs(dx) + Math.abs(dy) <= layerSize * 1.5) {
+          addTileToChunk({
+            x: centerX + dx,
+            y: centerY + dy,
+            type: 7, // Golden temple type
+            height: pyramidHeight - layer,
+          })
+        }
+      }
+    }
+  }
+
+  // Convert chunk map to array and assign priorities
+  // Center chunks get higher priority
+  const centerChunkX = Math.floor(17 / chunkSize)
+  const centerChunkY = Math.floor(17 / chunkSize)
+
+  chunkMap.forEach((tiles, key) => {
+    const [_, chunkXStr, chunkYStr] = key.split("-")
+    const chunkX = Number.parseInt(chunkXStr)
+    const chunkY = Number.parseInt(chunkYStr)
+
+    // Calculate distance from center for priority
+    const distanceFromCenter = Math.sqrt(Math.pow(chunkX - centerChunkX, 2) + Math.pow(chunkY - centerChunkY, 2))
+
+    // Higher priority (lower number) for chunks closer to center
+    const priority = Math.ceil(distanceFromCenter)
+
+    chunks.push({
+      id: key,
+      center: {
+        x: chunkX * chunkSize + Math.floor(chunkSize / 2),
+        y: chunkY * chunkSize + Math.floor(chunkSize / 2),
+      },
+      tiles,
+      priority,
+    })
+  })
+
+  return chunks
+}
+
+// Define floating clouds
+export interface CloudData {
+  id: string
+  x: number
+  y: number
+  size: "small" | "medium" | "large"
+  speed: "slow" | "medium" | "fast"
+  direction: "clockwise" | "counterclockwise"
+  type: "normal" | "storm" | "rain"
+  emoji: string
+}
+
+export const cloudData: CloudData[] = [
+  // Clouds on the right side
+  {
+    id: "cloud-1",
+    x: 500,
+    y: 300,
+    size: "large",
+    speed: "slow",
+    direction: "clockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+  {
+    id: "cloud-2",
+    x: 300,
+    y: 400,
+    size: "medium",
+    speed: "medium",
+    direction: "counterclockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+  {
+    id: "cloud-3",
+    x: 700,
+    y: 350,
+    size: "small",
+    speed: "fast",
+    direction: "clockwise",
+    type: "rain",
+    emoji: "🌧️",
+  },
+  {
+    id: "cloud-4",
+    x: 400,
+    y: 250,
+    size: "medium",
+    speed: "slow",
+    direction: "counterclockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+
+  // Clouds on the left side (new)
+  {
+    id: "cloud-5",
+    x: -200,
+    y: 450,
+    size: "small",
+    speed: "medium",
+    direction: "clockwise",
+    type: "storm",
+    emoji: "⛈️",
+  },
+  {
+    id: "cloud-6",
+    x: -350,
+    y: 500,
+    size: "large",
+    speed: "fast",
+    direction: "counterclockwise",
+    type: "rain",
+    emoji: "🌧️",
+  },
+  {
+    id: "cloud-7",
+    x: -500,
+    y: 400,
+    size: "medium",
+    speed: "medium",
+    direction: "clockwise",
+    type: "storm",
+    emoji: "⛈️",
+  },
+  {
+    id: "cloud-8",
+    x: -450,
+    y: 350,
+    size: "small",
+    speed: "slow",
+    direction: "counterclockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+
+  // Additional clouds for better distribution
+  {
+    id: "cloud-9",
+    x: -100,
+    y: 200,
+    size: "medium",
+    speed: "slow",
+    direction: "clockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+  {
+    id: "cloud-10",
+    x: 100,
+    y: 150,
+    size: "small",
+    speed: "medium",
+    direction: "counterclockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+  {
+    id: "cloud-11",
+    x: -300,
+    y: 300,
+    size: "large",
+    speed: "slow",
+    direction: "clockwise",
+    type: "normal",
+    emoji: "☁️",
+  },
+  {
+    id: "cloud-12",
+    x: 600,
+    y: 200,
+    size: "medium",
+    speed: "fast",
+    direction: "counterclockwise",
+    type: "rain",
+    emoji: "🌧️",
+  },
+]
+
+// Generate world data
+export const worldData: WorldData = {
+  meta: {
+    seed: 8675309,
+    biome: "jungle",
+    lastUpdated: "2025-05-10T15:00:00Z",
+  },
+  chunks: generateMinimalChunks(),
+  nodes: allNodes,
+  rivers: generateRiverSystem(),
+  decorations: generateLushDecorations(),
+}
+
+// Adjust node positions to bring them closer
+export function adjustNodePositions() {
+  // Find nodes that are too far away
+  const farNodes = worldData.nodes.filter((node) => {
+    const distance = Math.sqrt(Math.pow(node.position.x - 20, 2) + Math.pow(node.position.y - 20, 2))
+    return distance > 25 // Nodes more than 25 units from center
+  })
+
+  // Adjust their positions to be closer to the center
+  farNodes.forEach((node) => {
+    // Calculate vector from center to node
+    const dx = node.position.x - 20
+    const dy = node.position.y - 20
+    const distance = Math.sqrt(dx * dx + dy * dy)
+
+    // Scale the vector to be at most 25 units long
+    const scale = Math.min(1, 25 / distance)
+
+    // Update node position
+    node.position.x = 20 + dx * scale
+    node.position.y = 20 + dy * scale
+  })
+
+  return worldData
+}
+
+// Call this function to adjust node positions
+adjustNodePositions()
+
+// Batch chunks for progressive loading with smarter batching
+export function batchChunks(chunks: ChunkData[], batchSize = 10): ChunkData[][] {
+  const sortedChunks = sortChunksByPriority(chunks)
+  const batches: ChunkData[][] = []
+
+  // First batch: river chunks
+  const riverChunks = sortedChunks.filter((chunk) => chunk.tiles.some((tile) => tile.type === 1))
+
+  // Second batch: node platform chunks
+  const nodePlatformChunks = sortedChunks.filter(
+    (chunk) =>
+      !chunk.tiles.some((tile) => tile.type === 1) && chunk.tiles.some((tile) => tile.type === 4 || tile.type === 7),
+  )
+
+  // Remaining chunks
+  const remainingChunks = sortedChunks.filter(
+    (chunk) =>
+      !chunk.tiles.some((tile) => tile.type === 1) && !chunk.tiles.some((tile) => tile.type === 4 || tile.type === 7),
+  )
+
+  // Add river chunks as first batch
+  if (riverChunks.length > 0) {
+    batches.push(riverChunks)
+  }
+
+  // Add node platform chunks as second batch
+  if (nodePlatformChunks.length > 0) {
+    batches.push(nodePlatformChunks)
+  }
+
+  // Add remaining chunks in batches
+  for (let i = 0; i < remainingChunks.length; i += batchSize) {
+    batches.push(remainingChunks.slice(i, i + batchSize))
+  }
+
+  return batches
+}
+
+import type { ChunkData } from "@/lib/world-data"
+
+// Sort chunks by priority (lower number = higher priority)
+export function sortChunksByPriority(chunks: ChunkData[]): ChunkData[] {
+  // First, check if the chunk contains river or node tiles
+  const enhancedChunks = chunks.map((chunk) => {
+    // Check if chunk contains river tiles
+    const hasRiver = chunk.tiles.some((tile) => tile.type === 1)
+
+    // Check if chunk contains node platform tiles
+    const hasNodePlatform = chunk.tiles.some((tile) => tile.type === 4 || tile.type === 7)
+
+    // Assign priority based on content
+    let priority = chunk.priority
+    if (hasRiver) priority -= 5 // Higher priority for river chunks
+    if (hasNodePlatform) priority -= 3 // Higher priority for node platform chunks
+
+    return {
+      ...chunk,
+      enhancedPriority: priority,
+    }
+  })
+
+  return enhancedChunks.sort((a, b) => a.enhancedPriority - b.enhancedPriority)
+}

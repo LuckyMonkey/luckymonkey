@@ -1,0 +1,374 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 0%;
+  --foreground: 120 100% 80%;
+  --primary: 120 100% 40%;
+  --primary-foreground: 0 0% 0%;
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: monospace;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+  position: fixed;
+}
+
+html,
+body,
+#__next {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Water animations */
+@keyframes water-shimmer {
+  0% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.01);
+  }
+  100% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes water-ripple {
+  0% {
+    opacity: 0.2;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(1.05);
+  }
+  100% {
+    opacity: 0.2;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes waterfall-stream {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0.3;
+  }
+}
+
+.animate-water-shimmer {
+  animation: water-shimmer 3s infinite ease-in-out;
+}
+
+.animate-water-ripple {
+  animation: water-ripple 5s infinite ease-in-out;
+}
+
+.animate-waterfall {
+  animation: water-shimmer 2s infinite ease-in-out;
+}
+
+.animate-waterfall-stream {
+  animation: waterfall-stream 1s infinite linear;
+}
+
+/* Cloud animation keyframes */
+@keyframes float-clockwise {
+  0% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(50px, -20px);
+  }
+  50% {
+    transform: translate(100px, 0);
+  }
+  75% {
+    transform: translate(50px, 20px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes float-counterclockwise {
+  0% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-50px, -20px);
+  }
+  50% {
+    transform: translate(-100px, 0);
+  }
+  75% {
+    transform: translate(-50px, 20px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+/* Digital smoke animation */
+@keyframes digital-smoke {
+  0% {
+    opacity: 0.1;
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    opacity: 0.2;
+    transform: translateY(-20px) scale(1.1);
+  }
+  100% {
+    opacity: 0.1;
+    transform: translateY(-40px) scale(1);
+  }
+}
+
+/* Flame animation */
+@keyframes flame {
+  0% {
+    transform: translateY(0) scaleY(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateY(-8px) scaleY(1.2);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(-2px) scaleY(0.8);
+    opacity: 0.7;
+  }
+}
+
+/* Rain animation keyframes */
+@keyframes rain-1 {
+  0% {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+}
+
+@keyframes rain-2 {
+  0% {
+    transform: translateY(-5px);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(25px);
+    opacity: 0;
+  }
+}
+
+@keyframes rain-3 {
+  0% {
+    transform: translateY(-15px);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(35px);
+    opacity: 0;
+  }
+}
+
+@keyframes rain-4 {
+  0% {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(28px);
+    opacity: 0;
+  }
+}
+
+/* Animation classes with different durations */
+.animate-float-clockwise-slow {
+  animation: float-clockwise 60s infinite ease-in-out;
+}
+
+.animate-float-clockwise-medium {
+  animation: float-clockwise 40s infinite ease-in-out;
+}
+
+.animate-float-clockwise-fast {
+  animation: float-clockwise 20s infinite ease-in-out;
+}
+
+.animate-float-counterclockwise-slow {
+  animation: float-counterclockwise 60s infinite ease-in-out;
+}
+
+.animate-float-counterclockwise-medium {
+  animation: float-counterclockwise 40s infinite ease-in-out;
+}
+
+.animate-float-counterclockwise-fast {
+  animation: float-counterclockwise 20s infinite ease-in-out;
+}
+
+.animate-digital-smoke {
+  animation: digital-smoke 15s infinite ease-in-out;
+}
+
+.animate-flame {
+  animation: flame 0.8s infinite ease-in-out;
+}
+
+.animate-rain-1 {
+  animation: rain-1 1.5s infinite linear;
+}
+
+.animate-rain-2 {
+  animation: rain-2 1.8s infinite linear;
+  animation-delay: 0.3s;
+}
+
+.animate-rain-3 {
+  animation: rain-3 1.6s infinite linear;
+  animation-delay: 0.5s;
+}
+
+.animate-rain-4 {
+  animation: rain-4 1.7s infinite linear;
+  animation-delay: 0.7s;
+}
+
+@keyframes bubble {
+  0% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translateY(-10px);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+}
+
+.animate-bubble {
+  animation: bubble 3s infinite ease-out;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 142.1 76.2% 36.3%;
+    --primary-foreground: 355.7 100% 97.3%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 142.1 76.2% 36.3%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 0 0% 0%;
+    --foreground: 120 100% 80%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 120 100% 40%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 120 100% 40%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Add tailwind gradient utilities */
+@layer utilities {
+  .bg-gradient-radial {
+    background-image: radial-gradient(var(--tw-gradient-stops));
+  }
+}
+
+/* Grid background - isometric aligned (2:1 ratio) */
+.grid-background {
+  background-image: url("/images/grid_background.png");
+  background-size: 128px 64px; /* Proper isometric ratio */
+  background-repeat: repeat;
+  background-position: center center;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  opacity: 0.6;
+}
+
+/* Rain drop animation for clouds */
+@keyframes rain-drop {
+  0% { transform: translateY(-5px); opacity: 0; }
+  30% { opacity: 0.8; }
+  100% { transform: translateY(20px); opacity: 0; }
+}
