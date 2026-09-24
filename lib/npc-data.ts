@@ -1,3 +1,8 @@
+import { tileKey } from "@/lib/iso"
+
+/** Tile type by "x,y" grid key. */
+export type TileIndex = Map<string, number>
+
 export interface NPC {
   id: string
   type: "monkey" | "ghost" | "banana" | "lizard" | "crocodile"
@@ -443,7 +448,7 @@ function isWithinMapBounds(x: number, y: number): boolean {
 }
 
 // Update NPC positions based on their state and direction
-export function updateNPCs(npcs: NPC[], validTiles: { x: number; y: number; type: number }[]): NPC[] {
+export function updateNPCs(npcs: NPC[], validTiles: TileIndex): NPC[] {
   return npcs.map((npc) => {
     // Clone the NPC to avoid mutating the original
     const updatedNPC = { ...npc }
@@ -467,7 +472,7 @@ export function updateNPCs(npcs: NPC[], validTiles: { x: number; y: number; type
 }
 
 // Update monkey NPCs
-function updateMonkey(npc: NPC, validTiles: { x: number; y: number; type: number }[]): NPC {
+function updateMonkey(npc: NPC, validTiles: TileIndex): NPC {
   // Get the direction vector
   const dirVector = directionVectors[npc.direction]
 
@@ -495,7 +500,7 @@ function updateMonkey(npc: NPC, validTiles: { x: number; y: number; type: number
 }
 
 // Update ghost NPCs
-function updateGhost(npc: NPC, validTiles: { x: number; y: number; type: number }[]): NPC {
+function updateGhost(npc: NPC, validTiles: TileIndex): NPC {
   // Ghosts move more erratically
   const dirVector = directionVectors[npc.direction]
 
@@ -554,7 +559,7 @@ function updateBanana(npc: NPC): NPC {
 }
 
 // Update lizard NPCs
-function updateLizard(npc: NPC, validTiles: { x: number; y: number; type: number }[]): NPC {
+function updateLizard(npc: NPC, validTiles: TileIndex): NPC {
   // Lizards move along the river
   const dirVector = directionVectors[npc.direction]
 
@@ -582,7 +587,7 @@ function updateLizard(npc: NPC, validTiles: { x: number; y: number; type: number
 }
 
 // Update crocodile NPCs
-function updateCrocodile(npc: NPC, validTiles: { x: number; y: number; type: number }[]): NPC {
+function updateCrocodile(npc: NPC, validTiles: TileIndex): NPC {
   // Crocodiles move slowly in the river
   const dirVector = directionVectors[npc.direction]
 
@@ -637,20 +642,9 @@ export function getRandomNPC(type?: string): NPC {
   return randomNPC
 }
 
-// Check if a position is on a valid tile
-function isOnValidTile(
-  x: number,
-  y: number,
-  tiles: { x: number; y: number; type: number }[],
-  waterOnly = false,
-): boolean {
-  return tiles.some((tile) => {
-    if (Math.abs(tile.x - x) < 1 && Math.abs(tile.y - y) < 1) {
-      if (waterOnly) {
-        return tile.type === 1 // Water tile
-      }
-      return tile.type !== undefined // Any valid tile
-    }
-    return false
-  })
+// Check if a position is on a valid tile (O(1) lookup instead of scanning every tile)
+function isOnValidTile(x: number, y: number, tiles: TileIndex, waterOnly = false): boolean {
+  const type = tiles.get(tileKey(x, y))
+  if (type === undefined) return false
+  return waterOnly ? type === 1 : true
 }

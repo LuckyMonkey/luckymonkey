@@ -1,8 +1,6 @@
 "use client"
 
-import { useState } from "react"
-import { X } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { useEffect, useState } from "react"
 import { worldData } from "@/lib/world-data"
 
 interface NodeInfoPanelProps {
@@ -14,10 +12,16 @@ export function NodeInfoPanel({ nodeId, onClose }: NodeInfoPanelProps) {
   const [activeTab, setActiveTab] = useState<"info" | "assets">("info")
   const node = worldData.nodes.find((obj) => obj.id === nodeId)
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+
   if (!node) return null
 
   return (
-    <div className="absolute bottom-4 left-4 z-[1000] w-96 bg-black/90 border border-green-500/30 rounded-xl overflow-hidden font-mono backdrop-blur-sm">
+    <div className="absolute bottom-10 left-4 z-[1000] w-[calc(100vw-2rem)] max-w-sm max-h-[70vh] overflow-y-auto bg-black/95 border border-green-500/30 rounded-xl font-mono">
       <div className="flex items-center justify-between p-3 border-b border-green-500/20">
         <div>
           <h3 className="text-green-400 font-bold flex items-center gap-1 text-sm">
@@ -25,9 +29,9 @@ export function NodeInfoPanel({ nodeId, onClose }: NodeInfoPanelProps) {
           </h3>
           <p className="text-green-300 text-[10px]">{node.ipAddress}</p>
         </div>
-        <Button variant="ghost" size="icon" onClick={onClose} className="text-green-400 h-6 w-6">
-          <X className="h-4 w-4" />
-        </Button>
+        <button aria-label="Close" onClick={onClose} className="text-green-400 hover:text-green-200 w-8 h-8 text-xl leading-none">
+          ×
+        </button>
       </div>
 
       {/* Tab navigation */}
@@ -102,7 +106,7 @@ export function NodeInfoPanel({ nodeId, onClose }: NodeInfoPanelProps) {
                     <div
                       key={i}
                       className={`w-3 h-3 rounded-sm mr-0.5 ${
-                        i < node.securityLevel ? "bg-green-500" : "bg-green-900/50"
+                        i < (node.securityLevel ?? 0) ? "bg-green-500" : "bg-green-900/50"
                       }`}
                     />
                   ))}

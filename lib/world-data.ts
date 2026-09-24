@@ -1,3 +1,8 @@
+import { mulberry32 } from "@/lib/iso"
+
+const WORLD_SEED = 8675309
+const rand = mulberry32(WORLD_SEED)
+
 export interface Position {
   x: number
   y: number
@@ -225,36 +230,29 @@ function generateLushDecorations(): { type: string; position: Position }[] {
   const decorations: { type: string; position: Position }[] = []
 
   // Define biome areas
-  const biomes = [
+  const circles = [
     { name: "volcano", center: { x: 8, y: 8 }, radius: 6 },
     { name: "lagoon", center: { x: 17, y: 7 }, radius: 5 },
     { name: "small_lagoon", center: { x: 7, y: 12 }, radius: 4 },
     { name: "temple", center: { x: 17, y: 17 }, radius: 5 },
-    { name: "river", path: generateRiverSystem(), buffer: 3 },
   ]
+  const riverPath = generateRiverSystem()
+  const riverCells = new Set(riverPath.map((p) => `${p.x},${p.y}`))
+  const RIVER_BUFFER = 3
 
   // Function to determine biome at a position
   const getBiomeAt = (x: number, y: number): string => {
-    // Check circular biomes
-    for (const biome of biomes) {
-      if (biome.name !== "river" && "center" in biome) {
-        const center = biome.center as { x: number; y: number }
-        const distance = Math.sqrt(Math.pow(x - center.x, 2) + Math.pow(y - center.y, 2))
-        if (distance <= biome.radius) {
-          return biome.name
-        }
+    for (const biome of circles) {
+      if (Math.hypot(x - biome.center.x, y - biome.center.y) <= biome.radius) {
+        return biome.name
       }
     }
 
     // Check river biome
-    const riverBiome = biomes.find((b) => b.name === "river")
-    if (riverBiome && "path" in riverBiome) {
-      const path = riverBiome.path as Position[]
-      const buffer = riverBiome.buffer as number
-
-      for (const point of path) {
+    {
+      for (const point of riverPath) {
         const distance = Math.sqrt(Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2))
-        if (distance <= buffer) {
+        if (distance <= RIVER_BUFFER) {
           return "river"
         }
       }
@@ -265,39 +263,37 @@ function generateLushDecorations(): { type: string; position: Position }[] {
 
   // Add biome-specific decorations
   for (let x = 0; x < 40; x += 1) {
-    // Increased density by reducing step size
     for (let y = 0; y < 40; y += 1) {
-      // Increased density by reducing step size
       const biome = getBiomeAt(x, y)
 
       // Skip decorations directly on water
-      const isOnRiver = biomes.find((b) => b.name === "river")?.path.some((p) => p.x === x && p.y === y)
+      const isOnRiver = riverCells.has(`${x},${y}`)
 
       if (isOnRiver) continue
 
       // Add biome-specific decorations with some randomness
-      if (Math.random() < 0.3) {
+      if (rand() < 0.3) {
         // Increased probability for more decorations
         let decorationType = "flower"
         let height = 0
 
         switch (biome) {
           case "volcano":
-            decorationType = Math.random() < 0.7 ? "crystal" : "rock"
-            height = Math.floor(Math.random() * 3)
+            decorationType = rand() < 0.7 ? "crystal" : "rock"
+            height = Math.floor(rand() * 3)
             break
           case "lagoon":
           case "small_lagoon":
-            decorationType = Math.random() < 0.6 ? "lotus" : "flower"
+            decorationType = rand() < 0.6 ? "lotus" : "flower"
             break
           case "temple":
-            decorationType = Math.random() < 0.6 ? "bamboo" : "tree"
+            decorationType = rand() < 0.6 ? "bamboo" : "tree"
             break
           case "river":
-            decorationType = Math.random() < 0.7 ? "flower" : "bush"
+            decorationType = rand() < 0.7 ? "flower" : "bush"
             break
           default:
-            decorationType = ["tree", "bush", "flower", "bamboo", "mushroom"][Math.floor(Math.random() * 5)]
+            decorationType = ["tree", "bush", "flower", "bamboo", "mushroom"][Math.floor(rand() * 5)]
         }
 
         decorations.push({
@@ -309,32 +305,31 @@ function generateLushDecorations(): { type: string; position: Position }[] {
   }
 
   // Add specific decorations around volcano
-  const volcanoCenter = biomes.find((b) => b.name === "volcano")?.center as { x: number; y: number }
+  const volcanoCenter = circles[0].center
   for (let i = 0; i < 20; i++) {
     // More decorations
     const angle = (i / 20) * Math.PI * 2
-    const distance = 3 + Math.random() * 2
+    const distance = 3 + rand() * 2
     const x = Math.round(volcanoCenter.x + Math.cos(angle) * distance)
     const y = Math.round(volcanoCenter.y + Math.sin(angle) * distance)
 
     decorations.push({
       type: "crystal",
-      position: { x, y, height: Math.floor(Math.random() * 3) + 1 },
+      position: { x, y, height: Math.floor(rand() * 3) + 1 },
     })
   }
 
   // Add more trees along the river
-  const riverPath = biomes.find((b) => b.name === "river")?.path as Position[]
   for (let i = 0; i < riverPath.length; i += 2) {
     // More frequent decorations
     const point = riverPath[i]
 
     // Add trees on both sides of the river
     for (let side = -1; side <= 1; side += 2) {
-      if (Math.random() < 0.8) {
+      if (rand() < 0.8) {
         // Higher probability
         decorations.push({
-          type: Math.random() < 0.7 ? "tree" : "bush",
+          type: rand() < 0.7 ? "tree" : "bush",
           position: { x: point.x + side * 2, y: point.y, height: 0 },
         })
       }
@@ -345,7 +340,7 @@ function generateLushDecorations(): { type: string; position: Position }[] {
 }
 
 // Define the nodes with updated positions to connect to rivers
-const allNodes = [
+const allNodes: NodeData[] = [
   // Original nodes with updated positions
   {
     id: "monkey-statue",
@@ -811,149 +806,10 @@ function generateMinimalChunks(): ChunkData[] {
 }
 
 // Define floating clouds
-export interface CloudData {
-  id: string
-  x: number
-  y: number
-  size: "small" | "medium" | "large"
-  speed: "slow" | "medium" | "fast"
-  direction: "clockwise" | "counterclockwise"
-  type: "normal" | "storm" | "rain"
-  emoji: string
-}
-
-export const cloudData: CloudData[] = [
-  // Clouds on the right side
-  {
-    id: "cloud-1",
-    x: 500,
-    y: 300,
-    size: "large",
-    speed: "slow",
-    direction: "clockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-  {
-    id: "cloud-2",
-    x: 300,
-    y: 400,
-    size: "medium",
-    speed: "medium",
-    direction: "counterclockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-  {
-    id: "cloud-3",
-    x: 700,
-    y: 350,
-    size: "small",
-    speed: "fast",
-    direction: "clockwise",
-    type: "rain",
-    emoji: "🌧️",
-  },
-  {
-    id: "cloud-4",
-    x: 400,
-    y: 250,
-    size: "medium",
-    speed: "slow",
-    direction: "counterclockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-
-  // Clouds on the left side (new)
-  {
-    id: "cloud-5",
-    x: -200,
-    y: 450,
-    size: "small",
-    speed: "medium",
-    direction: "clockwise",
-    type: "storm",
-    emoji: "⛈️",
-  },
-  {
-    id: "cloud-6",
-    x: -350,
-    y: 500,
-    size: "large",
-    speed: "fast",
-    direction: "counterclockwise",
-    type: "rain",
-    emoji: "🌧️",
-  },
-  {
-    id: "cloud-7",
-    x: -500,
-    y: 400,
-    size: "medium",
-    speed: "medium",
-    direction: "clockwise",
-    type: "storm",
-    emoji: "⛈️",
-  },
-  {
-    id: "cloud-8",
-    x: -450,
-    y: 350,
-    size: "small",
-    speed: "slow",
-    direction: "counterclockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-
-  // Additional clouds for better distribution
-  {
-    id: "cloud-9",
-    x: -100,
-    y: 200,
-    size: "medium",
-    speed: "slow",
-    direction: "clockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-  {
-    id: "cloud-10",
-    x: 100,
-    y: 150,
-    size: "small",
-    speed: "medium",
-    direction: "counterclockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-  {
-    id: "cloud-11",
-    x: -300,
-    y: 300,
-    size: "large",
-    speed: "slow",
-    direction: "clockwise",
-    type: "normal",
-    emoji: "☁️",
-  },
-  {
-    id: "cloud-12",
-    x: 600,
-    y: 200,
-    size: "medium",
-    speed: "fast",
-    direction: "counterclockwise",
-    type: "rain",
-    emoji: "🌧️",
-  },
-]
-
 // Generate world data
 export const worldData: WorldData = {
   meta: {
-    seed: 8675309,
+    seed: WORLD_SEED,
     biome: "jungle",
     lastUpdated: "2025-05-10T15:00:00Z",
   },
@@ -991,67 +847,3 @@ export function adjustNodePositions() {
 
 // Call this function to adjust node positions
 adjustNodePositions()
-
-// Batch chunks for progressive loading with smarter batching
-export function batchChunks(chunks: ChunkData[], batchSize = 10): ChunkData[][] {
-  const sortedChunks = sortChunksByPriority(chunks)
-  const batches: ChunkData[][] = []
-
-  // First batch: river chunks
-  const riverChunks = sortedChunks.filter((chunk) => chunk.tiles.some((tile) => tile.type === 1))
-
-  // Second batch: node platform chunks
-  const nodePlatformChunks = sortedChunks.filter(
-    (chunk) =>
-      !chunk.tiles.some((tile) => tile.type === 1) && chunk.tiles.some((tile) => tile.type === 4 || tile.type === 7),
-  )
-
-  // Remaining chunks
-  const remainingChunks = sortedChunks.filter(
-    (chunk) =>
-      !chunk.tiles.some((tile) => tile.type === 1) && !chunk.tiles.some((tile) => tile.type === 4 || tile.type === 7),
-  )
-
-  // Add river chunks as first batch
-  if (riverChunks.length > 0) {
-    batches.push(riverChunks)
-  }
-
-  // Add node platform chunks as second batch
-  if (nodePlatformChunks.length > 0) {
-    batches.push(nodePlatformChunks)
-  }
-
-  // Add remaining chunks in batches
-  for (let i = 0; i < remainingChunks.length; i += batchSize) {
-    batches.push(remainingChunks.slice(i, i + batchSize))
-  }
-
-  return batches
-}
-
-import type { ChunkData } from "@/lib/world-data"
-
-// Sort chunks by priority (lower number = higher priority)
-export function sortChunksByPriority(chunks: ChunkData[]): ChunkData[] {
-  // First, check if the chunk contains river or node tiles
-  const enhancedChunks = chunks.map((chunk) => {
-    // Check if chunk contains river tiles
-    const hasRiver = chunk.tiles.some((tile) => tile.type === 1)
-
-    // Check if chunk contains node platform tiles
-    const hasNodePlatform = chunk.tiles.some((tile) => tile.type === 4 || tile.type === 7)
-
-    // Assign priority based on content
-    let priority = chunk.priority
-    if (hasRiver) priority -= 5 // Higher priority for river chunks
-    if (hasNodePlatform) priority -= 3 // Higher priority for node platform chunks
-
-    return {
-      ...chunk,
-      enhancedPriority: priority,
-    }
-  })
-
-  return enhancedChunks.sort((a, b) => a.enhancedPriority - b.enhancedPriority)
-}
