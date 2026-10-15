@@ -1,75 +1,39 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
-import dynamic from "next/dynamic"
-import { WelcomeScreen } from "@/components/welcome-screen"
-import { NodeInfoPanel } from "@/components/node-info-panel"
-import { FloatingCloud } from "@/components/floating-cloud"
-import type { View } from "@/components/pixi-renderer"
-import { cloudData } from "@/lib/cloud-types"
+import { useEffect, useState } from "react"
 import { asset } from "@/lib/asset"
 
-// Pixi touches window/WebGL, so it only ever loads in the browser.
-const World = dynamic(() => import("@/components/pixi-renderer"), { ssr: false })
+// The whole game is a Bevy (Rust -> WebAssembly) app in public/game/, built by
+// tools/deploy.sh. This page only hosts its canvas.
+let started = false
 
 export default function Home() {
-  const [started, setStarted] = useState(false)
-  const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [mapLoaded, setMapLoaded] = useState(false)
-  const [view, setView] = useState<View>({ x: 0, y: 0, zoom: 1 })
-  const [isMobile, setIsMobile] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 768px), (pointer: coarse)")
-    const update = () => setIsMobile(mq.matches)
-    update()
-    mq.addEventListener("change", update)
-    return () => mq.removeEventListener("change", update)
+    if (started) return
+    started = true
+    if (!document.createElement("canvas").getContext("webgl2")) {
+      setError("This browser has no WebGL2, which Lucky Monkey needs.")
+      return
+    }
+    import(/* webpackIgnore: true */ asset("/game/luckymonkey.js"))
+      .then((game) => game.default({ module_or_path: asset("/game/luckymonkey_bg.wasm") }))
+      .catch((e: unknown) => {
+        // winit hands the event loop to the browser by throwing on purpose.
+        if (!String(e).includes("Using exceptions for control flow")) setError(String(e))
+      })
   }, [])
 
-  const closePanel = useCallback(() => setSelectedNode(null), [])
-  const onMapLoaded = useCallback(() => setMapLoaded(true), [])
-
   return (
-    <main className="relative w-full h-dvh overflow-hidden">
-      {/* Isometric grid backdrop (2:1) with a soft vignette */}
-      <div
-        className="absolute inset-0 opacity-60"
-        style={{
-          backgroundImage: `url('${asset("/images/grid_background.png")}')`,
-          backgroundSize: "128px 64px",
-          backgroundPosition: "center",
-        }}
-      />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.3) 50%, transparent 100%), radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.5) 100%)",
-        }}
-      />
-
-      {!started ? (
-        <WelcomeScreen onProceed={() => setStarted(true)} />
-      ) : (
-        <div className="relative w-full h-full">
-          <World onSelectNode={setSelectedNode} onMapLoaded={onMapLoaded} onViewChange={setView} isMobile={isMobile} />
-
-          {/* Clouds ride along with the map's pan and zoom */}
-          {mapLoaded && (
-            <div
-              className="absolute left-1/2 top-1/2 w-0 h-0 pointer-events-none z-[100]"
-              style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
-            >
-              {cloudData.map((cloud) => (
-                <FloatingCloud key={cloud.id} {...cloud} />
-              ))}
-            </div>
-          )}
-
-          {selectedNode && <NodeInfoPanel nodeId={selectedNode} onClose={closePanel} />}
+    <main className="relative w-full h-dvh overflow-hidden bg-black font-mono">
+      <div className="absolute inset-0 flex items-center justify-center text-center pointer-events-none">
+        <div>
+          <div className="text-2xl mb-2 text-green-400">{error ? "Could not start" : "Generating World"}</div>
+          <div className="text-sm text-green-300 max-w-sm px-4">{error ?? "Initializing Lucky Monkey Network..."}</div>
         </div>
-      )}
+      </div>
+      <canvas id="lm-canvas" className="absolute inset-0 w-full h-full outline-none" style={{ touchAction: "none" }} />
     </main>
   )
 }

@@ -1,14 +1,14 @@
 {
   "name": "luckymonkey",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Lucky Monkey - isometric jungle network proof of concept. Runs on the shared fridge-next runtime; there is no local npm install.",
+  "description": "Lucky Monkey - isometric jungle network. The game is Bevy/WebAssembly (game/); Next.js on the shared fridge-next runtime only hosts it.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start -p 3000"
   },
   "fridgeNext": {
-    "needs": ["next", "react", "react-dom", "pixi.js", "tailwindcss", "postcss", "autoprefixer", "typescript"]
+    "needs": ["next", "react", "react-dom", "tailwindcss", "postcss", "autoprefixer", "typescript"]
   }
 }

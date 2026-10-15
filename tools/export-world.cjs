@@ -1,0 +1,25 @@
+// Dump the seeded world (lib/world-data.ts) and NPC roster (lib/npc-data.ts) to JSON for the Bevy game.
+// Usage: node tools/export-world.cjs   (uses typescript from the shared fridge-next runtime)
+const fs = require("fs"), path = require("path"), Module = require("module")
+const ts = require(path.join(__dirname, "../node_modules/typescript"))
+const root = path.join(__dirname, "..")
+const load = (rel) => {
+  const file = path.join(root, rel)
+  const src = fs.readFileSync(file, "utf8").replace(/from "@\/lib\//g, 'from "./')
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
+  const m = new Module(file, module)
+  m.filename = file
+  m.paths = Module._nodeModulePaths(path.dirname(file))
+  m.require = (id) => (id.startsWith("./") ? load(`lib/${id.slice(2)}.ts`) : require(id))
+  m._compile(js, file)
+  return m.exports
+}
+const { worldData } = load("lib/world-data.ts")
+const { initialNPCs } = load("lib/npc-data.ts")
+const out = path.join(root, "game/assets")
+const tiles = worldData.chunks.flatMap((c) => c.tiles).map(({ x, y, type, height }) => ({ x, y, type, height }))
+const world = { seed: worldData.meta.seed, tiles, nodes: worldData.nodes, decorations: worldData.decorations }
+fs.writeFileSync(`${out}/world.json`, JSON.stringify(world))
+const npcs = initialNPCs.map(({ id, type, x, y, height, direction, speed, emoji, lifespan }) => ({ id, type, x, y, height, direction, speed, emoji, lifespan }))
+fs.writeFileSync(`${out}/npcs.json`, JSON.stringify(npcs))
+console.log(`tiles ${tiles.length}, nodes ${worldData.nodes.length}, decorations ${worldData.decorations.length}, npcs ${npcs.length}`)
