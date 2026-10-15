@@ -28,4 +28,4 @@ ssh "$HOST" "set -e; export SUDO_ASKPASS=/home/fridge/.sudo-askpass
   sudo -A chown -R root:root /srv/apps/luckymonkey && sudo -A chmod -R a+rX /srv/apps/luckymonkey
   sudo -A fridge-next luckymonkey build >/tmp/lm-build.log 2>&1 || { tail -30 /tmp/lm-build.log; exit 1; }
   sudo -A fridge-next luckymonkey restart
-  sleep 3; sudo -A docker ps --filter name=luckymonkey --format "{{.Names}} {{.Status}}""
+  sleep 3; sudo -A docker ps --filter name=luckymonkey --format "{{.Names}} {{.Status}}"
