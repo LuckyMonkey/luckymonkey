@@ -4,7 +4,7 @@ title: Lucky Monkey source - ui.rs
 
 # Source: game/src/ui.rs
 
-**Welcome screen, zoom buttons, hint bar, the node panel.** Explained in [interface](../interface.md). 513 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ui.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**Welcome screen, zoom buttons, hint bar, the node panel.** Explained in [interface](../interface.md). 552 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ui.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -42,6 +42,7 @@ Screens and overlays: the welcome gate, zoom HUD, hint bar and node panel.
 | [fn proceed](#fn_proceed) |  |
 | [fn hud_button](#fn_hud_button) |  |
 | [fn spawn_hud](#fn_spawn_hud) |  |
+| [fn scroll_panels](#fn_scroll_panels) | Mouse wheel over a scrollable panel scrolls it (the map ignores the wheel over UI). |
 | [fn pointer_over_ui](#fn_pointer_over_ui) |  |
 | [fn buttons](#fn_buttons) |  |
 | [fn zoom_label](#fn_zoom_label) |  |
@@ -198,7 +199,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(OnEnter(Screen::Playing), spawn_hud)
         .add_systems(
             Update,
-            (pointer_over_ui, buttons, zoom_label, panel).run_if(in_state(Screen::Playing)),
+            (pointer_over_ui, buttons, zoom_label, panel, scroll_panels).run_if(in_state(Screen::Playing)),
         );
 }
 ```
@@ -471,6 +472,30 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, windows: Query<&Window>) {
 }
 ```
 
+### fn scroll_panels
+
+Mouse wheel over a scrollable panel scrolls it (the map ignores the wheel over UI).
+
+```rust
+fn scroll_panels(mut wheel: MessageReader<bevy::input::mouse::MouseWheel>, mut q: Query<(&Interaction, &Node, &mut ScrollPosition)>) {
+    let dy: f32 = wheel
+        .read()
+        .map(|e| match e.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => e.y * 40.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => e.y,
+        })
+        .sum();
+    if dy == 0.0 {
+        return;
+    }
+    for (i, node, mut pos) in &mut q {
+        if *i != Interaction::None && node.overflow.y == OverflowAxis::Scroll {
+            pos.0.y = (pos.0.y - dy).max(0.0);
+        }
+    }
+}
+```
+
 ### fn pointer_over_ui
 
 ```rust
@@ -601,6 +626,8 @@ fn panel(
                 left: if wide { Val::Auto } else { px(16) },
                 right: px(16),
                 width: if wide { px(384) } else { Val::Auto },
+                max_height: Val::Vh(86.0),
+                overflow: Overflow::scroll_y(),
                 flex_direction: FlexDirection::Column,
                 border: UiRect::all(px(1)),
                 border_radius: BorderRadius::all(px(12)),
@@ -662,6 +689,24 @@ fn panel(
                                     });
                             }
                         });
+                    }
+                    let sim = &game.sim;
+                    if let Some(role) = sim.rules.roles.get(&node.kind) {
+                        body.spawn(section(&art, "役割 Role"));
+                        body.spawn(label(&art, role.clone(), 11.0, GREEN_300));
+                    }
+                    let impact = if index == sim.core {
+                        "This is the core router: every path runs through it.".to_string()
+                    } else {
+                        match sim.impact_if_down(index) {
+                            0 => "If it goes down, other paths route around it.".to_string(),
+                            k => format!("If it goes down, {k} other service(s) lose their path to the core."),
+                        }
+                    };
+                    body.spawn(label(&art, impact, 11.0, Color::srgb(0.55, 0.8, 1.0)));
+                    if !node.lore.is_empty() {
+                        body.spawn(section(&art, "伝説 Lore"));
+                        body.spawn(label(&art, node.lore.clone(), 11.0, Color::srgb(0.85, 0.82, 0.68)));
                     }
                     if !calm {
                         body.spawn(section(&art, "説明 About"));

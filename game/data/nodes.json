@@ -21,7 +21,8 @@
     "security_matrix.dat",
     "memetic_defense_v3.sys",
     "avatar_config.json"
-   ]
+   ],
+   "lore": "Carved by the first sysadmins from a single block of jade, the Guardian sits at the top of the pyramid and watches every packet with half-closed eyes. Monkeys leave a banana at its feet before every deploy. Nobody admits to believing it helps."
   },
   {
    "id": "logical-lagoon",
@@ -41,7 +42,8 @@
     "memory_fragments.dat",
     "lotus_protocol.bin",
     "static_frog.gif"
-   ]
+   ],
+   "lore": "The river slows here into a warm pool where APIs float on lotus pads. The frogs say the water remembers every request ever made of it. They also hand out addresses to anything new that splashes in."
   },
   {
    "id": "digital-river",
@@ -61,7 +63,8 @@
     "signal_patterns.bin",
     "ping_monitor.log",
     "rapids_config.json"
-   ]
+   ],
+   "lore": "A fast, shallow channel that carries raw signal from the lagoon to the shore. On calm days you can see the frames glinting under the surface like minnows."
   },
   {
    "id": "banana-sector",
@@ -81,7 +84,8 @@
     "unstable_objects.dat",
     "humor_algorithm.js",
     "banana_manifest.json"
-   ]
+   ],
+   "lore": "Every banana the jungle has ever needed twice is kept here, ripe and ready, so nobody has to climb to the archive again. When it forgets one, the whole jungle notices the walk."
   },
   {
    "id": "node-temple-1",
@@ -101,7 +105,8 @@
     "ghostpacket_protocol.dat",
     "maintenance_routines.sys",
     "temple_history.txt"
-   ]
+   ],
+   "lore": "The older of the two temples, built before anyone wrote things down. Ghostpackets still sweep its halls at night, delivering messages addressed to people who left long ago."
   },
   {
    "id": "node-temple-2",
@@ -121,7 +126,8 @@
     "mysterious_origins.log",
     "deeper_sector_map.dat",
     "ancient_symbols.svg"
-   ]
+   ],
+   "lore": "Its door opens only for a hash nobody remembers choosing. The priests keep a backup of the hash on a stone tablet in the vault, which is locked with the same hash."
   },
   {
    "id": "crashed-sector",
@@ -141,7 +147,8 @@
     "server_husks.dat",
     "ghostpacket_traces.bin",
     "crash_report.json"
-   ]
+   ],
+   "lore": "Something fell out of the sky here once and never booted again. The monkeys keep it around as a reminder to take backups."
   },
   {
    "id": "server-hub",
@@ -160,7 +167,8 @@
     "cryptic_messages.log",
     "terminal_output.txt",
     "processing_algorithms.js"
-   ]
+   ],
+   "lore": "Rows of humming racks under the canopy, warm enough that the parrots nest on top of them in the rainy season. Most of the jungle's work actually happens here."
   },
   {
    "id": "main-router",
@@ -181,7 +189,8 @@
     "network_traffic.log",
     "signal_distribution.bin",
     "router_config.json"
-   ]
+   ],
+   "lore": "Perched on the highest ledge of Temple Isle, the router knows a path to every island. If it goes quiet, the islands can still see each other across the void but have no way to talk."
   },
   {
    "id": "firewall-north",
@@ -201,7 +210,8 @@
     "ancient_code.bin",
     "traffic_logs.txt",
     "security_protocols.json"
-   ]
+   ],
+   "lore": "A wall of thorny vines that lets the right traffic through and stings everything else. It runs rules written so long ago that nobody dares delete one."
   },
   {
    "id": "firewall-south",
@@ -220,7 +230,8 @@
     "predator_logs.txt",
     "defense_patterns.bin",
     "security_breach_history.json"
-   ]
+   ],
+   "lore": "The southern wall is younger and stricter. It checks every packet twice, which the southern islanders call security and everyone else calls slow."
   },
   {
    "id": "database-cluster",
@@ -239,7 +250,8 @@
     "authentication_factors.dat",
     "storage_index.bin",
     "access_logs.txt"
-   ]
+   ],
+   "lore": "Three stone towers that hold the same records, so losing one never loses a record. Keeping the three in agreement is a full-time job for a very patient sloth."
   },
   {
    "id": "volcano-core",
@@ -258,7 +270,8 @@
     "eruption_schedule.dat",
     "heat_resistant_protocols.bin",
     "lava_flow_control.json"
-   ]
+   ],
+   "lore": "The fastest processor in the jungle runs inside a live volcano, cooled by the river and good intentions. It throttles itself whenever the leaves pile up on the vents."
   },
   {
    "id": "ai-core-01",
@@ -277,7 +290,8 @@
     "neural_index.bin",
     "thought_patterns.dat",
     "simulation_core.sys"
-   ]
+   ],
+   "lore": "A thinking stone that sorts the jungle's problems by how weird they are. It once predicted a disk would fill on a Tuesday. It was a Wednesday, but everyone was impressed."
   },
   {
    "id": "vault-01",
@@ -296,7 +310,8 @@
     "system_snapshot.bin",
     "recovery_logic.dat",
     "archive_index.sys"
-   ]
+   ],
+   "lore": "The backups live here, behind three doors and one very suspicious toucan. A backup nobody has ever restored is just a hope, so the toucan restores one every Friday."
   },
   {
    "id": "switch-01",
@@ -315,7 +330,8 @@
     "routing_table.bin",
     "connection_map.dat",
     "signal_logs.sys"
-   ]
+   ],
+   "lore": "Every cable on the shore meets at this junction, where a switch decides which port each frame goes out of. Plug two of its ports into each other and the frames chase themselves forever."
   },
   {
    "id": "banana-cache-01",
@@ -334,7 +350,8 @@
     "meme_collection.bin",
     "joke_database.dat",
     "banana_manifest.sys"
-   ]
+   ],
+   "lore": "A small cache of jokes the monkeys tell during long outages. It is surprisingly critical infrastructure."
   },
   {
    "id": "terminal-01",
@@ -352,7 +369,8 @@
     "command_history.log",
     "bootword_list.dat",
     "access_codes.sys"
-   ]
+   ],
+   "lore": "An old green-screen terminal at the end of the lake path. Its commands still work, mostly, as long as you type them in capital letters."
   },
   {
    "id": "quantum-nexus",
@@ -371,7 +389,8 @@
     "superposition_matrix.bin",
     "observation_effects.log",
     "uncertainty_calculations.js"
-   ]
+   ],
+   "lore": "An experimental machine on Ember Isle that is both running and not running until someone checks. The on-call monkey would rather it just picked one."
   },
   {
    "id": "data-archive",
@@ -390,7 +409,8 @@
     "lost_algorithms.dat",
     "pre_digital_artifacts.sys",
     "binary_preservation.log"
-   ]
+   ],
+   "lore": "The deepest storage in the jungle: every log, every snapshot, every version of every banana count. It fills up slowly and then all at once."
   },
   {
    "id": "lizard-node",
@@ -409,7 +429,8 @@
     "cold_blood.bin",
     "scale_pattern.dat",
     "sun_basking.sys"
-   ]
+   ],
+   "lore": "A cold-blooded monitor that lies very still on a warm rock and notices everything. It reports nothing until it is sure, which is either wisdom or laziness."
   },
   {
    "id": "data-lake",
@@ -430,7 +451,8 @@
     "replica_a.dat",
     "replica_b.dat",
     "replica_c.dat"
-   ]
+   ],
+   "lore": "Where the river finally stops. Every frame that ever flowed downstream settles here, and the analysts fish for patterns from the shore."
   },
   {
    "id": "dns-shrine",
@@ -451,7 +473,8 @@
     "zonefile.txt",
     "resolver.sys",
     "ttl_prayers.log"
-   ]
+   ],
+   "lore": "Monks chant the names of every island and the numbers they stand for. Visitors ask for a name and leave with a number. When the monks forget, nobody can find anything."
   },
   {
    "id": "lb-lilypads",
@@ -471,7 +494,8 @@
    "assets": [
     "pool_members.json",
     "health_checks.log"
-   ]
+   ],
+   "lore": "Frames cross the river by hopping pad to pad. The pads take turns carrying them, so no single pad sinks under the weight."
   },
   {
    "id": "mq-falls",
@@ -491,7 +515,8 @@
     "queue_depth.dat",
     "dead_letters.log",
     "consumers.json"
-   ]
+   ],
+   "lore": "Messages queue in the pool at the top of the falls and drop one at a time, in order, so nothing downstream gets swamped."
   },
   {
    "id": "watchtower",
@@ -511,7 +536,8 @@
     "dashboards.json",
     "alert_rules.yml",
     "pager.log"
-   ]
+   ],
+   "lore": "A lonely tower on a floating rock, its telescope pointed at every island at once. It sees trouble coming: expiring certificates, scheduled deploys, filling disks."
   },
   {
    "id": "auth-gate",
@@ -532,7 +558,8 @@
     "ca_bundle.pem",
     "sessions.dat",
     "policy.json"
-   ]
+   ],
+   "lore": "A carved gate where every visitor shows their papers. It also keeps the certificates the rest of the jungle trusts, which makes it a very popular target."
   },
   {
    "id": "cdn-canopy",
@@ -551,7 +578,8 @@
    "assets": [
     "edge_cache.bin",
     "purge_requests.log"
-   ]
+   ],
+   "lore": "Copies of the most popular bananas, cached high in the treetops by the delta, so visitors never have to wait for the trip upstream."
   }
  ]
 }

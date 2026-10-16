@@ -56,6 +56,23 @@ def main():
                 put(cx + dx, cy + dy, kind, h)
                 owner[(cx + dx, cy + dy)] = isl["id"]
 
+    # Hills: a few stepped mounds per island for verticality (not on temple or lava).
+    for isl in lay["islands"]:
+        cx, cy = isl["center"]
+        r = isl["radius"]
+        for _ in range(isl.get("hills", 0)):
+            a = rng.uniform(0, 2 * math.pi)
+            dd = rng.uniform(0.25, 0.6) * r
+            hx, hy = cx + math.cos(a) * dd, cy + math.sin(a) * dd
+            peak = rng.randint(2, 3)
+            spread = rng.uniform(1.6, 2.6)
+            for (x, y), t in tiles.items():
+                if owner.get((x, y)) != isl["id"] or t["type"] not in (GRASS, PLATFORM, SCORCHED):
+                    continue
+                lift = peak - int(math.hypot(x - hx, y - hy) / spread * peak)
+                if lift > 0:
+                    t["height"] += lift
+
     # Node placement: island centre + offset, standing on the ground there.
     where, island_of = {}, {}
     for isl in lay["islands"]:
@@ -163,7 +180,7 @@ def main():
         r = rng.choice([1, 1, 2])
         if any((cx + dx, cy + dy) in tiles for dx in range(-r - 3, r + 4) for dy in range(-r - 3, r + 4)):
             continue
-        h = rng.randint(0, 4)
+        h = rng.randint(0, lay.get("islet_max_height", 4))
         for dx in range(-r, r + 1):
             for dy in range(-r, r + 1):
                 if abs(dx) + abs(dy) <= r:

@@ -27,7 +27,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # Deep links read the URL hash (link.rs); data.rs reads the fetched JSON.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }
 # Live data: data.rs reads window.LM_DATA (fetched JSON) at startup.
 js-sys = "0.3"
 

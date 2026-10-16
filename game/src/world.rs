@@ -107,6 +107,8 @@ pub struct NodeData {
     pub assets: Vec<String>,
     #[serde(default)]
     pub island: String,
+    #[serde(default)]
+    pub lore: String,
 }
 
 #[derive(Deserialize)]
@@ -274,8 +276,17 @@ fn spawn_island_labels(mut commands: Commands, world: Res<World>, art: Res<Art>)
         commands.spawn((
             Text2d::new(format!("{} {}", isl.emoji, isl.name.to_uppercase())),
             art.text(true, 36.0),
-            TextColor(Color::srgba(0.75, 1.0, 0.85, 0.55)),
+            TextColor(Color::srgba(0.85, 1.0, 0.9, 0.95)),
             Transform::from_translation(at.extend(NODE_Z - 5.0)).with_scale(Vec3::splat(0.5)),
+        ))
+        .with_child((
+            Sprite {
+                image: art.pill.clone(),
+                color: Color::srgba(0.0, 0.0, 0.0, 0.6),
+                custom_size: Some(Vec2::new(isl.name.chars().count() as f32 * 23.0 + 80.0, 56.0)),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 0.0, -0.01),
         ));
     }
 }
@@ -517,7 +528,7 @@ fn spawn_backdrop(mut commands: Commands, world: Res<World>, art: Res<Art>) {
             image: art.grid.clone(),
             color: Color::srgba(1.0, 1.0, 1.0, 0.35),
             custom_size: Some(size),
-            image_mode: SpriteImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: 0.25 },
+            image_mode: SpriteImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: 0.6 },
             ..default()
         },
         Transform::from_translation(world.bounds.center().extend(-100.0)),

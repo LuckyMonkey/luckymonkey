@@ -89,3 +89,35 @@ Reading it: ignoring the network misses the target at every level and collapses
 some shift-3 runs; any engaged player stays well above it. Skill shows in score,
 recovery time and prevention more than in SLA: the bots react within seconds,
 humans won't, so real SLAs will be lower.
+
+## Second pass: learning, ropes, crews, game over
+
+- **Tour the network (T)** outside shifts: steps through every node island by
+  island with its role in plain words, what it links to, and how many services
+  would lose their path if it went down (`Sim::impact_if_down`). Nothing breaks
+  during the tour. Every node has lore (`nodes.json` → `lore`) and a role
+  (`tuning.json` → `roles`) in its panel.
+- **Practice (P)**: level 0, one problem at a time, 3× longer timers, no
+  spreading, no early end, full crew. It doesn't move you up a level.
+- **Crew per scenario**: each level lists its `crew` (training: Mango + Pip; shift
+  2: + Moss; shift 3+: + Fern 🐸, a hardware specialist). Off-shift workers can be
+  called in mid-shift for `call_cost` bananas (K).
+- **Ropes**: links between islands are drawn as slack ropes (quadratic sag, 14
+  pieces, frames ride the curve), visible at rest. Any link touching a live
+  incident turns bright red, 5 px, fully opaque.
+- **Time to Loss** is a big red 56 px timer on a dark red plate for incidents,
+  amber for warnings, a small green ALL CLEAR otherwise.
+- **Game over / shift summary**: score breakdown (fixes + prevention + combo),
+  what went right and what went wrong (specific notes recorded during play), a tip,
+  and this browser's shift history (`localStorage`, last 20). Levels advance only
+  when the SLA target is met.
+- **Readability**: dark plates behind map text (countdowns, popups, worker
+  names, island names); panels are opaque, scroll with the wheel and fit the screen.
+- **Verticality**: island heights 1-9, stepped hills per island
+  (`islands.json` → `hills`), taller islets; the river cuts canyons where the
+  ground is higher than the water. The background grid is 2.4× larger.
+
+![Overview: taller islands, rope links](img/oncall-overview.png)
+![Tour](img/oncall-tour.png)
+![Incident: red links, big Time to Loss](img/oncall-red-links.png)
+![Game over](img/oncall-gameover.png)

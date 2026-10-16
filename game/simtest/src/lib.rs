@@ -141,7 +141,7 @@ pub fn play(seed: u64, level: usize, policy: Policy) -> (Run, Sim) {
                 }
                 Policy::Expert => {
                     let Some(a) = sim.fixes_for(i).into_iter().find(|a| (0..sim.workers.len()).any(|w| sim.can_do(w, a))) else { continue };
-                    let free: Vec<usize> = (0..sim.workers.len()).filter(|&w| sim.workers[w].queue.len() < 2 && sim.can_do(w, &a)).collect();
+                    let free: Vec<usize> = (0..sim.workers.len()).filter(|&w| sim.workers[w].active && sim.workers[w].queue.len() < 2 && sim.can_do(w, &a)).collect();
                     if let Some(&w) = free.iter().min_by(|&&a2, &&b2| sim.eta(a2, i).total_cmp(&sim.eta(b2, i))) {
                         let _ = sim.order(Some(w), i, Some(&a));
                     }

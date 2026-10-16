@@ -94,6 +94,9 @@ pub struct ActionDef {
     /// Preventive maintenance (the sloth's speciality).
     #[serde(default)]
     pub maintenance: bool,
+    /// Physical hardware work (the tree frog's speciality).
+    #[serde(default)]
+    pub hardware: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -116,6 +119,9 @@ pub struct WorkerDef {
     /// Multiplier for diagnosis instead of `work`.
     #[serde(default)]
     pub diagnose_work: Option<f32>,
+    /// Multiplier for hardware actions instead of `work`.
+    #[serde(default)]
+    pub hardware_work: Option<f32>,
     #[serde(default = "yes")]
     pub can_heavy: bool,
     /// Jobs before a rest.
@@ -144,6 +150,12 @@ pub struct Level {
     /// Multiplier on fault TTLs.
     #[serde(default = "one")]
     pub ttl_mult: f32,
+    /// Worker names on shift (empty: everyone). Others can be called in for bananas.
+    #[serde(default)]
+    pub crew: Vec<String>,
+    /// No early end and no spreading: a place to learn.
+    #[serde(default)]
+    pub practice: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -217,6 +229,16 @@ pub struct Rules {
     /// Node kind -> weight in network health (default 1).
     #[serde(default)]
     pub criticality: HashMap<String, f32>,
+    /// Node kind -> what it does, in plain words (tour, panel).
+    #[serde(default)]
+    pub roles: HashMap<String, String>,
+    /// Bananas to call an off-shift worker in.
+    #[serde(default = "three")]
+    pub call_cost: u32,
+}
+
+fn three() -> u32 {
+    3
 }
 
 impl Rules {
@@ -304,6 +326,8 @@ pub struct Task {
 #[derive(Clone, Debug)]
 pub struct Worker {
     pub def: usize,
+    /// On shift. Off-shift workers can be called in (`call_in`).
+    pub active: bool,
     pub name: String,
     pub emoji: String,
     pub at: usize,
@@ -451,6 +475,10 @@ pub struct Stats {
     pub critical_secs: f32,
     /// action key -> times it fixed something
     pub fixes_by: HashMap<String, u32>,
+    pub points_fix: u32,
+    pub points_prevent: u32,
+    pub points_combo: u32,
+    pub called_in: u32,
 }
 
 /// The next consequence: what the big Time to Loss timer shows.
@@ -501,6 +529,9 @@ pub struct Sim {
     pub stats: Stats,
     pub learned: Vec<(String, String)>,
     pub outcome: Option<Outcome>,
+    /// What went right / wrong this shift, for the summary.
+    pub notes_good: Vec<String>,
+    pub notes_bad: Vec<String>,
     pub bananas: u32,
     pub score: u32,
     pub combo: u32,
@@ -558,6 +589,8 @@ impl Sim {
             stats: Stats::default(),
             learned: Vec::new(),
             outcome: None,
+            notes_good: Vec::new(),
+            notes_bad: Vec::new(),
             bananas: 0,
             score: 0,
             combo: 0,
@@ -587,6 +620,7 @@ impl Sim {
                 let at = self.nodes.iter().position(|n| n.id == d.home).unwrap_or(self.core);
                 Worker {
                     def: i,
+                    active: true,
                     name: d.name.clone(),
                     emoji: d.emoji.clone(),
                     at,
@@ -725,6 +759,51 @@ impl Sim {
         Some(format!("{}: {}", c.name, c.text))
     }
 
+    fn note(&mut self, good: bool, s: String) {
+        let list = if good { &mut self.notes_good } else { &mut self.notes_bad };
+        if !list.contains(&s) && list.len() < 12 {
+            list.push(s);
+        }
+    }
+
+    /// How many services would lose their path to the core if `node` went down.
+    pub fn impact_if_down(&self, node: usize) -> usize {
+        let n = self.nodes.len();
+        let blocked = |i: usize| i == node || self.health[i] == Health::Down;
+        let mut reach = vec![false; n];
+        let mut stack: Vec<usize> = self.cores.iter().copied().filter(|&c| !blocked(c)).collect();
+        for &c in &stack {
+            reach[c] = true;
+        }
+        while let Some(u) = stack.pop() {
+            for &v in &self.neighbours[u] {
+                if !reach[v] && !blocked(v) {
+                    reach[v] = true;
+                    stack.push(v);
+                }
+            }
+        }
+        let before = (0..n).filter(|&i| self.health[i] != Health::Unreachable && self.health[i] != Health::Down).count();
+        let after = (0..n).filter(|&i| reach[i]).count();
+        before.saturating_sub(after).saturating_sub(1)
+    }
+
+    /// Spend bananas to bring an off-shift worker in.
+    pub fn call_in(&mut self, w: usize) -> Result<(), String> {
+        if self.workers[w].active {
+            return Err(format!("{} is already on shift", self.workers[w].name));
+        }
+        if self.bananas < self.rules.call_cost {
+            return Err(format!("Calling {} in costs {} 🍌", self.workers[w].name, self.rules.call_cost));
+        }
+        self.bananas -= self.rules.call_cost;
+        self.workers[w].active = true;
+        self.stats.called_in += 1;
+        let (name, emoji) = (self.workers[w].name.clone(), self.workers[w].emoji.clone());
+        self.say(Cat::Dispatch, &emoji, format!("{name} called in to help (🍌 -{})", self.rules.call_cost), None, Some(w), None);
+        Ok(())
+    }
+
     // ------------------------------------------------------------ shift
 
     pub fn start(&mut self, level: usize) {
@@ -746,7 +825,13 @@ impl Sim {
         self.next_root = self.level_def().first;
         self.next_notice = 12.0;
         self.log.clear();
+        self.notes_good.clear();
+        self.notes_bad.clear();
         self.spawn_workers();
+        let crew = self.level_def().crew.clone();
+        for w in &mut self.workers {
+            w.active = crew.is_empty() || crew.contains(&w.name);
+        }
         self.recompute();
         let name = self.level_def().name.clone();
         self.say(Cat::Shift, "🕘", format!("09:00 shift started ({name}). Keep the jungle network up until 17:00."), None, None, None);
@@ -884,6 +969,9 @@ impl Sim {
         }
         if !back.is_empty() {
             let text = format!("{} service(s) reachable again on their own: the path is back", back.len());
+            if back.len() >= 3 {
+                self.note(true, format!("One repair brought {} cut-off services back at once", back.len()));
+            }
             self.say(Cat::Recover, "↺", text, Some(back[0]), None, Some("reach".into()));
         }
         let mut total = 0.0;
@@ -917,8 +1005,15 @@ impl Sim {
         let (base, mult) = if action == "diagnose" {
             (self.rules.diagnose_secs, d.diagnose_work.unwrap_or(d.work))
         } else {
-            let (secs, maint) = self.rules.action(action).map_or((3.0, false), |a| (a.secs, a.maintenance));
-            (secs, if maint { d.maintenance_work.unwrap_or(d.work) } else { d.work })
+            let (secs, maint, hw) = self.rules.action(action).map_or((3.0, false, false), |a| (a.secs, a.maintenance, a.hardware));
+            let mult = if hw && d.hardware_work.is_some() {
+                d.hardware_work.unwrap()
+            } else if maint {
+                d.maintenance_work.unwrap_or(d.work)
+            } else {
+                d.work
+            };
+            (secs, mult)
         };
         let cold = if self.health[node] == Health::Down { 1.5 } else { 1.0 };
         base * mult * cold
@@ -960,6 +1055,7 @@ impl Sim {
     /// Best worker for a job: can do it, soonest start.
     pub fn pick_worker(&self, node: usize, action: Option<&str>) -> Option<usize> {
         (0..self.workers.len())
+            .filter(|&w| self.workers[w].active)
             .filter(|&w| action.is_none_or(|a| self.can_do(w, a)))
             .filter(|&w| self.workers[w].queue.len() < self.rules.queue_max)
             .min_by(|&a, &b| self.eta(a, node).total_cmp(&self.eta(b, node)))
@@ -975,6 +1071,9 @@ impl Sim {
             Some(w) => w,
             None => self.pick_worker(node, action).ok_or("Everyone's queue is full")?,
         };
+        if !self.workers[w].active {
+            return Err(format!("{} is off shift: call them in (K) for {} 🍌", self.workers[w].name, self.rules.call_cost));
+        }
         if let Some(a) = action {
             if !self.can_do(w, a) {
                 let d = &self.rules.workers[self.workers[w].def];
@@ -1153,7 +1252,9 @@ impl Sim {
         }
         self.clock += dt;
         for w in 0..self.workers.len() {
-            self.step_worker(w, dt);
+            if self.workers[w].active {
+                self.step_worker(w, dt);
+            }
         }
         self.step_faults(dt);
         self.director();
@@ -1170,8 +1271,9 @@ impl Sim {
         } else {
             self.outage_for = 0.0;
         }
-        if self.outage_for >= self.rules.outage_secs {
+        if self.outage_for >= self.rules.outage_secs && !self.level_def().practice {
             self.phase = Phase::Collapsed;
+            self.note(false, format!("Network health stayed under {:.0}% for {:.0}s: the shift ended early", self.rules.outage_floor, self.rules.outage_secs));
             self.say(Cat::Critical, "💥", "Major outage: the network stayed below the outage floor too long. Shift over.".into(), None, None, None);
         } else if self.clock >= self.rules.shift_secs {
             self.phase = Phase::Done;
@@ -1338,6 +1440,7 @@ impl Sim {
                 self.reward(true, 0.0);
                 let learned = self.learn(&def.concept, format!("prevented {} at {nname}", def.name));
                 self.say(Cat::Resolved, "✅", format!("{wname} prevented {} at {nname}", def.name), Some(node), Some(w), None);
+                self.note(true, format!("Prevented {} at {nname} before it hit ({alabel})", def.name));
                 self.outcome = Some(Outcome { node, ok: true, title: format!("PREVENTED: {nname}"), cause: def.warning.as_ref().unwrap().text.clone(), action: alabel, learned, t: self.clock });
                 self.after_resolve(f.id);
                 self.recompute();
@@ -1355,6 +1458,14 @@ impl Sim {
                 self.reward(false, f.ttl.max(0.0));
                 let learned = self.learn(&def.concept, format!("{} at {nname}", def.name));
                 self.say(Cat::Resolved, "✅", format!("{nname} restored: {}. {}", alabel, r.note), Some(node), Some(w), None);
+                let full = def.ttl * self.level_def().ttl_mult;
+                if f.diagnosed {
+                    self.note(true, format!("Diagnosed {} at {nname} first, then fixed the cause", def.name));
+                } else if f.stage != Stage::Down && f.ttl > full * 0.5 {
+                    self.note(true, format!("Fixed {} at {nname} fast, with {:.0}s to spare", def.name, f.ttl));
+                } else if f.stage == Stage::Down {
+                    self.note(true, format!("Brought {nname} back from an outage ({})", def.name));
+                }
                 self.outcome = Some(Outcome { node, ok: true, title: format!("RESOLVED: {nname}"), cause: def.name.clone(), action: format!("{alabel}. {}", r.note), learned, t: self.clock });
                 self.after_resolve(f.id);
                 self.recompute();
@@ -1369,6 +1480,7 @@ impl Sim {
                     }
                 }
                 self.stats.mitigations += 1;
+                self.note(true, format!("Bought time at {nname} with {alabel}"));
                 self.say(Cat::Mitigated, "⏱", format!("{nname}: {alabel} bought {:.0}s. {}", r.secs, r.note), Some(node), Some(w), None);
                 self.outcome = Some(Outcome {
                     node,
@@ -1399,6 +1511,7 @@ impl Sim {
         let (wname, wemoji) = (self.workers[w].name.clone(), self.workers[w].emoji.clone());
         self.say(Cat::NoEffect, &wemoji, format!("{wname}: {alabel} done, {nname} unchanged. {why}"), Some(node), Some(w), None);
         let cause = self.fault_def(node).map_or(String::new(), |d| d.name.clone());
+        self.note(false, format!("{alabel} on {cause} at {nname} didn't help: {why}"));
         self.outcome = Some(Outcome { node, ok: false, title: format!("NO EFFECT: {nname}"), cause, action: format!("{alabel}: {why}"), learned: None, t: self.clock });
     }
 
@@ -1406,7 +1519,14 @@ impl Sim {
         self.combo += 1;
         let mult = (1.0 + 0.25 * (self.combo - 1) as f32).min(2.0);
         let base = if prevent { self.rules.points_prevent } else { self.rules.points_fix + ttl_left * self.rules.points_per_ttl_sec };
-        self.score += (base * mult) as u32;
+        let total = (base * mult) as u32;
+        self.score += total;
+        if prevent {
+            self.stats.points_prevent += base as u32;
+        } else {
+            self.stats.points_fix += base as u32;
+        }
+        self.stats.points_combo += total.saturating_sub(base as u32);
         self.bananas += if prevent { self.rules.banana_prevent } else { self.rules.banana_fix };
     }
 
@@ -1431,6 +1551,7 @@ impl Sim {
                     changed = true;
                     let fname = def.as_ref().map_or(f.kind.clone(), |d| d.name.clone());
                     self.say(Cat::Incident, "⏱", format!("{name}: the mitigation wore off, {fname} is back"), Some(i), None, None);
+                    self.note(false, format!("The mitigation at {name} wore off before anyone came back with the real fix for {fname}"));
                 }
                 self.faults[i] = Some(f);
                 continue;
@@ -1454,11 +1575,16 @@ impl Sim {
                             f.tried = 0;
                             f.diagnosed = false;
                             self.stats.escalated_warnings += 1;
+                            self.note(false, format!("The warning at {name} wasn't acted on in time and became {}", d.name));
                             self.say(Cat::Incident, &d.emoji, format!("{name}: the warning became an incident: {}. {}", d.name, d.symptom), Some(i), None, None);
                         } else {
                             f.stage = Stage::Down;
                             f.down_for = 0.0;
                             self.stats.outages += 1;
+                            let cut = self.impact_if_down(i);
+                            let fname0 = def.as_ref().map_or(f.kind.clone(), |d| d.name.clone());
+                            let extra = if cut > 0 { format!(", cutting off {cut} other service(s)") } else { String::new() };
+                            self.note(false, format!("{name} went down ({fname0}) when its Time to Loss ran out{extra}"));
                             let crit = i == self.core || self.rules.criticality.get(&self.nodes[i].kind).is_some_and(|w| *w >= 3.0);
                             let fname = def.as_ref().map_or(f.kind.clone(), |d| d.name.clone());
                             self.say(
@@ -1474,7 +1600,7 @@ impl Sim {
                 }
                 Stage::Down => {
                     f.down_for += dt;
-                    if def.as_ref().is_some_and(|d| d.spreads) && !f.spread_done && f.down_for >= self.rules.director.spread_after {
+                    if def.as_ref().is_some_and(|d| d.spreads) && !f.spread_done && f.down_for >= self.rules.director.spread_after && !self.level_def().practice {
                         f.spread_done = true;
                         spread.push((i, f.kind.clone(), f.root));
                     }
@@ -1490,6 +1616,8 @@ impl Sim {
             let j = healthy[self.below(healthy.len())];
             if self.raise(j, &kind, false, Some(root)) {
                 self.stats.spreads += 1;
+                let (a, b) = (self.nodes[from].name.clone(), self.nodes[j].name.clone());
+                self.note(false, format!("{kind} spread from {a} to {b} after {a} stayed down"));
             }
         }
         if changed {

@@ -4,7 +4,7 @@ title: Lucky Monkey source code
 
 # Source code
 
-The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: a5e76c8 2026-10-16). Back to the [documentation](../index.md).
+The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: 398758c 2026-10-16). Back to the [documentation](../index.md).
 
 **Where to start reading:** [main.rs](main.md) (how the app is put together), then [ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and [fn clock](ops.md#fn_clock).
 
@@ -19,8 +19,8 @@ The whole game, readable in the wiki. Each Rust file has a heading for every fun
 | [game/src/npc.rs](npc.md) | Wandering critters: monkeys, ghosts, bananas, lizards, crocodiles. | 5 functions, 21 items |
 | [game/src/clouds.rs](clouds.md) | Clouds drawn like the original divs; rain; storms that flash and send lightning strikes. | 8 functions, 19 items |
 | [game/src/view.rs](view.md) | The camera: pan, zoom, touch, picking nodes, following, deep-link zoom. | 11 functions, 21 items |
-| [game/src/ui.rs](ui.md) | Welcome screen, zoom buttons, hint bar, the node panel. | 18 functions, 37 items |
-| [game/src/ops.rs](ops.md) | The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD. | 44 functions, 96 items |
+| [game/src/ui.rs](ui.md) | Welcome screen, zoom buttons, hint bar, the node panel. | 19 functions, 38 items |
+| [game/src/ops.rs](ops.md) | The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD. | 52 functions, 114 items |
 
 ## Around it: data, build, hosting
 

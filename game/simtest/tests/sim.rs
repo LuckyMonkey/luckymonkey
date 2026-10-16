@@ -13,9 +13,9 @@ fn run_until(sim: &mut lm_simtest::sim::Sim, max: f32, mut done: impl FnMut(&lm_
 /// A quiet sim: running, but the director held off (we stage faults by hand).
 fn staged(seed: u64) -> lm_simtest::sim::Sim {
     let mut sim = new_sim(seed);
-    sim.rules.director.levels[1].first = 1e9;
+    sim.rules.director.levels[2].first = 1e9;
     sim.rules.director.notice_every = 1e9;
-    sim.start(1);
+    sim.start(2);
     sim
 }
 
@@ -24,7 +24,7 @@ fn a_director_is_gentle_on_a_healthy_network() {
     for seed in 1..=10 {
         // Training shift: the first minute brings exactly one scripted problem.
         let mut sim = new_sim(seed);
-        sim.start(0);
+        sim.start(1);
         let mut max_open = 0;
         while sim.clock < 60.0 {
             sim.step(0.1);
@@ -33,7 +33,7 @@ fn a_director_is_gentle_on_a_healthy_network() {
         assert_eq!(max_open, 1, "seed {seed}: training opened {max_open} faults in the first minute");
         // Shift 2, nobody acting: root causes stay within the budget and no critical event comes early.
         let mut sim = new_sim(seed);
-        sim.start(1);
+        sim.start(2);
         while sim.clock < 120.0 {
             sim.step(0.1);
             assert!(sim.open_roots() <= 3, "seed {seed}: {} roots open", sim.open_roots());
@@ -177,8 +177,8 @@ fn h_event_flood_is_grouped_and_urgent_stays_visible() {
 
 #[test]
 fn i_same_seed_same_shift() {
-    let (a, sa) = play(42, 2, Policy::Expert);
-    let (b, sb) = play(42, 2, Policy::Expert);
+    let (a, sa) = play(42, 3, Policy::Expert);
+    let (b, sb) = play(42, 3, Policy::Expert);
     assert_eq!(a.roots, b.roots);
     assert_eq!(sa.score, sb.score);
     let la: Vec<&String> = sa.log.iter().map(|e| &e.text).collect();
@@ -188,10 +188,38 @@ fn i_same_seed_same_shift() {
 
 #[test]
 fn j_shift_ends_cleanly_with_real_stats() {
-    let (run, sim) = play(7, 0, Policy::Expert);
+    let (run, sim) = play(7, 1, Policy::Expert);
     assert!(run.completed, "an attentive player finishes the training shift");
     assert_eq!(sim.phase, Phase::Done);
     let summary = sim.summary().join("\n");
     assert!(summary.contains(&format!("Incidents resolved: {}", sim.stats.resolved)));
     assert!(sim.log.iter().any(|e| e.cat == Cat::Shift && e.text.contains("17:00")));
+}
+
+#[test]
+fn k_scenario_crew_and_call_in() {
+    let mut sim = new_sim(9);
+    sim.start(1); // training: Mango and Pip only
+    let on: Vec<&str> = sim.workers.iter().filter(|w| w.active).map(|w| w.name.as_str()).collect();
+    assert_eq!(on, ["Mango", "Pip"]);
+    let moss = sim.workers.iter().position(|w| w.name == "Moss").unwrap();
+    assert!(sim.order(Some(moss), 0, None).is_err(), "off-shift workers can't be ordered");
+    sim.bananas = 5;
+    sim.call_in(moss).unwrap();
+    assert!(sim.workers[moss].active);
+    assert_eq!(sim.bananas, 5 - sim.rules.call_cost);
+    assert!(sim.order(Some(moss), 0, None).is_ok());
+}
+
+#[test]
+fn l_summary_explains_right_and_wrong() {
+    let mut sim = staged(11);
+    let n = node(&sim, "logical-lagoon");
+    sim.raise(n, "dhcp", false, None);
+    sim.order(None, n, Some("restart")).unwrap();
+    sim.order(None, n, Some("expandpool")).unwrap();
+    run_until(&mut sim, 120.0, |s| s.faults[n].is_none());
+    assert!(sim.notes_bad.iter().any(|x| x.contains("didn't help")), "{:?}", sim.notes_bad);
+    assert!(!sim.notes_good.is_empty(), "{:?}", sim.notes_good);
+    assert_eq!(sim.score, sim.stats.points_fix + sim.stats.points_prevent + sim.stats.points_combo);
 }

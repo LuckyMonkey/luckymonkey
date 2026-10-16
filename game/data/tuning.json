@@ -25,6 +25,27 @@
   "notice_every": 22,
   "levels": [
    {
+    "name": "Practice: no pressure",
+    "practice": true,
+    "first": 8,
+    "interval": [
+     30,
+     30
+    ],
+    "max_roots": [
+     1,
+     1
+    ],
+    "warning_share": 0.5,
+    "ttl_mult": 3.0,
+    "crew": [
+     "Mango",
+     "Pip",
+     "Moss",
+     "Fern"
+    ]
+   },
+   {
     "name": "Shift 1: training",
     "tutorial": true,
     "first": 10,
@@ -37,7 +58,11 @@
      2
     ],
     "warning_share": 0.5,
-    "ttl_mult": 1.3
+    "ttl_mult": 1.3,
+    "crew": [
+     "Mango",
+     "Pip"
+    ]
    },
    {
     "name": "Shift 2",
@@ -51,7 +76,12 @@
      3
     ],
     "warning_share": 0.45,
-    "ttl_mult": 1.1
+    "ttl_mult": 1.1,
+    "crew": [
+     "Mango",
+     "Pip",
+     "Moss"
+    ]
    },
    {
     "name": "Shift 3+",
@@ -65,7 +95,13 @@
      4
     ],
     "warning_share": 0.4,
-    "ttl_mult": 0.85
+    "ttl_mult": 0.85,
+    "crew": [
+     "Mango",
+     "Pip",
+     "Moss",
+     "Fern"
+    ]
    }
   ]
  },
@@ -106,6 +142,19 @@
    "maintenance_work": 0.5,
    "stamina": 4,
    "rest": 16
+  },
+  {
+   "name": "Fern",
+   "species": "tree frog",
+   "emoji": "🐸",
+   "role": "Hardware specialist: hops fast between nodes and is twice as quick with cables, vents and power; too small for deploys and databases.",
+   "home": "switch-01",
+   "speed": 360,
+   "work": 1.3,
+   "hardware_work": 0.5,
+   "can_heavy": true,
+   "stamina": 5,
+   "rest": 12
   }
  ],
  "tutorial": [
@@ -666,7 +715,8 @@
    "emoji": "🔌",
    "label": "Replace the cable",
    "secs": 5,
-   "heavy": true
+   "heavy": true,
+   "hardware": true
   },
   "fixroute": {
    "emoji": "🧭",
@@ -716,12 +766,14 @@
    "label": "Clear the vents",
    "secs": 4,
    "heavy": true,
-   "maintenance": true
+   "maintenance": true,
+   "hardware": true
   },
   "failover": {
    "emoji": "🔀",
    "label": "Fail over to standby",
-   "secs": 4
+   "secs": 4,
+   "hardware": true
   },
   "rollback": {
    "emoji": "⏪",
@@ -927,5 +979,29 @@
   "monitor": "#d97706",
   "auth": "#7c3aed",
   "cdn": "#059669"
- }
+ },
+ "roles": {
+  "monkey": "The Guardian: a core hub. Many paths run through it.",
+  "router": "A router forwards packets between networks using its routing table. If it fails, everything that reaches the rest of the network through it is cut off.",
+  "river": "A network segment where devices join, get addresses (DHCP) and talk to each other.",
+  "banana-cache": "A cache keeps copies of frequently used data close by, so requests don't have to go all the way to the database.",
+  "temple": "An application server: runs services that other nodes call.",
+  "server": "A general-purpose server running services. Can crash, leak memory or overheat.",
+  "firewall": "A firewall allows or blocks traffic by rules (ACLs). The first line against attacks.",
+  "database": "A database stores records, often as several replicas that must agree.",
+  "volcano": "A high-performance compute node: fast, hot, and sensitive to cooling.",
+  "ai-core": "A compute node running heavy workloads.",
+  "vault": "Backup storage. Backups only count if they can be restored.",
+  "switch": "A switch connects devices on the same network and forwards frames by MAC address. Loops between switches cause broadcast storms unless Spanning Tree blocks them.",
+  "terminal": "A client machine: a user's view of the network.",
+  "lizard": "A monitoring probe watching a segment.",
+  "lake": "A data lake: large, cheap storage for raw data and analytics.",
+  "dns": "A DNS server turns names into IP addresses. Without it, names stop working even though the network is fine.",
+  "balancer": "A load balancer spreads requests across several servers so none is overloaded.",
+  "queue": "A message queue holds messages in order until consumers are ready, smoothing out bursts.",
+  "monitor": "Monitoring: collects metrics and warns before things break. If it's unreachable you lose your warnings.",
+  "auth": "Authentication: checks identities and holds TLS certificates others trust.",
+  "cdn": "A content delivery network caches content close to users."
+ },
+ "call_cost": 3
 }

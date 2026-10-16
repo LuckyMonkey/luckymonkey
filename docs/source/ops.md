@@ -4,7 +4,7 @@ title: Lucky Monkey source - ops.rs
 
 # Source: game/src/ops.rs
 
-**The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD.** Explained in [simulation](../simulation.md). 1459 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ops.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD.** Explained in [simulation](../simulation.md). 1786 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ops.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -27,8 +27,20 @@ workers, edge pins).
 | [const TEXT](#const_text) |  |
 | [const PANEL_BG](#const_panel_bg) |  |
 | [struct Game](#struct_game) | The simulation plus the player's UI choices. |
+| [struct Played](#struct_played) |  |
+| [const HISTORY_KEY](#const_history_key) |  |
+| [fn load_history](#fn_load_history) |  |
+| [fn save_history](#fn_save_history) |  |
 | [impl Game](#impl_game) |  |
-| [struct LinkLine](#struct_linkline) |  |
+| [struct LinkLine](#struct_linkline) | One straight piece of a link (ropes between islands have many). |
+| [struct LinkCurves](#struct_linkcurves) | Each link's path on screen: two points, or a sagging rope. |
+| [const ROPE_SEGS](#const_rope_segs) |  |
+| [const ROPE](#const_rope) |  |
+| [struct TourCard](#struct_tourcard) |  |
+| [struct TourText](#struct_tourtext) |  |
+| [struct PracticeButton](#struct_practicebutton) |  |
+| [struct TourButton](#struct_tourbutton) |  |
+| [struct StartRow](#struct_startrow) |  |
 | [struct LinkFrame](#struct_linkframe) |  |
 | [struct Badge](#struct_badge) |  |
 | [struct BadgeTtl](#struct_badgettl) |  |
@@ -70,10 +82,15 @@ workers, edge pins).
 | [fn clock_str](#fn_clock_str) |  |
 | [fn mmss](#fn_mmss) |  |
 | [const FRAME_GAP](#const_frame_gap) |  |
+| [fn curve](#fn_curve) | A link's path: straight within an island, a slack rope between islands. |
+| [fn along](#fn_along) | Point and direction at fraction `k` along a path. |
+| [fn path_len](#fn_path_len) |  |
+| [fn plate](#fn_plate) | A dark rounded plate behind map text so it reads against the jungle. |
 | [fn spawn_overlay](#fn_spawn_overlay) |  |
 | [fn link_focus](#fn_link_focus) | Is this link part of what the player is looking at (selection or trouble)? |
 | [fn link_health](#fn_link_health) |  |
-| [fn links](#fn_links) | Quiet by default; the selected node's neighbourhood and troubled links stand out. |
+| [fn link_incident](#fn_link_incident) | Is a live incident (not a warning, not held by a mitigation) on either end? |
+| [fn links](#fn_links) | Ropes and lines: visible at rest, the selection highlighted, and any link |
 | [fn frames](#fn_frames) | Frames ride each link both ways. A flood races red toward its victim; a down |
 | [fn badge_text](#fn_badge_text) |  |
 | [fn cards](#fn_cards) |  |
@@ -90,10 +107,11 @@ workers, edge pins).
 | [fn controls](#fn_controls) |  |
 | [fn boxed](#fn_boxed) |  |
 | [fn spawn_hud](#fn_spawn_hud) |  |
+| [fn tour_card](#fn_tour_card) |  |
 | [fn set](#fn_set) |  |
 | [fn next_step](#fn_next_step) | One line telling the player what to do now. |
 | [fn hud](#fn_hud) |  |
-| [fn ttl_box](#fn_ttl_box) | The big timer: the next consequence, calm when there is none. No blinking: |
+| [fn ttl_box](#fn_ttl_box) | The big timer: the next consequence, calm when there is none. Red for a live |
 | [fn worker_line](#fn_worker_line) |  |
 | [fn roster](#fn_roster) |  |
 | [fn stage_tag](#fn_stage_tag) |  |
@@ -176,6 +194,60 @@ pub struct Game {
     outcome_hidden: bool,
     /// Last order error, shown in the hint line for a moment.
     pub notice: Option<(String, f32)>,
+    /// Network tour: position in `tour_order`.
+    tour: Option<usize>,
+    tour_order: Vec<usize>,
+    /// Scores of every shift played (this browser), newest last.
+    history: Vec<Played>,
+    recorded: bool,
+}
+```
+
+### struct Played
+
+```rust
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Played {
+    name: String,
+    score: u32,
+    sla: f32,
+    met: bool,
+}
+```
+
+### const HISTORY_KEY
+
+```rust
+const HISTORY_KEY: &str = "luckymonkey-scores";
+```
+
+### fn load_history
+
+```rust
+fn load_history() -> Vec<Played> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let s = web_sys::window().and_then(|w| w.local_storage().ok().flatten()).and_then(|st| st.get_item(HISTORY_KEY).ok().flatten());
+        if let Some(s) = s {
+            return serde_json::from_str(&s).unwrap_or_default();
+        }
+    }
+    Vec::new()
+}
+```
+
+### fn save_history
+
+```rust
+fn save_history(h: &[Played]) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let (Some(st), Ok(s)) = (web_sys::window().and_then(|w| w.local_storage().ok().flatten()), serde_json::to_string(h)) {
+            let _ = st.set_item(HISTORY_KEY, &s);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = h;
 }
 ```
 
@@ -194,9 +266,71 @@ impl Game {
 
 ### struct LinkLine
 
+One straight piece of a link (ropes between islands have many).
+
 ```rust
 #[derive(Component)]
-struct LinkLine(usize);
+struct LinkLine {
+    link: usize,
+    len: f32,
+    rope: bool,
+}
+```
+
+### struct LinkCurves
+
+Each link's path on screen: two points, or a sagging rope.
+
+```rust
+#[derive(Resource)]
+struct LinkCurves(Vec<Vec<Vec2>>);
+```
+
+### const ROPE_SEGS
+
+```rust
+const ROPE_SEGS: usize = 14;
+```
+
+### const ROPE
+
+```rust
+const ROPE: Color = Color::srgb(0.72, 0.57, 0.36);
+```
+
+### struct TourCard
+
+```rust
+#[derive(Component)]
+struct TourCard;
+```
+
+### struct TourText
+
+```rust
+#[derive(Component)]
+struct TourText;
+```
+
+### struct PracticeButton
+
+```rust
+#[derive(Component)]
+struct PracticeButton;
+```
+
+### struct TourButton
+
+```rust
+#[derive(Component)]
+struct TourButton;
+```
+
+### struct StartRow
+
+```rust
+#[derive(Component)]
+struct StartRow;
 ```
 
 ### struct LinkFrame
@@ -476,7 +610,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
         .add_systems(Update, (links, frames, cards, popups, worker_tokens))
-        .add_systems(Update, (pins, pin_clicks, outcome_card, guide, summary).run_if(in_state(Screen::Playing)))
+        .add_systems(Update, (pins, pin_clicks, outcome_card, guide, summary, tour_card).run_if(in_state(Screen::Playing)))
         .add_systems(
             Update,
             (navigate, controls, tick, strikes, hud, ttl_box, roster, alert_list, feed, live_ttls).chain().run_if(in_state(Screen::Playing)),
@@ -514,7 +648,33 @@ fn setup(mut commands: Commands, world: Res<World>, mut rng: ResMut<Rng>) {
     #[cfg(not(target_arch = "wasm32"))]
     let seed = ((rng.f32() * 1e6) as u64) << 16 | 0x5eed;
     let sim = Sim::new(tuning().rules.clone(), nodes, links, seed);
-    commands.insert_resource(Game { sim, chosen: None, next_level: 0, guide_open: false, outcome_seen: -1.0, outcome_hidden: false, notice: None });
+    // The tour walks the islands in order, node by node.
+    let mut tour_order = Vec::new();
+    for isl in &world.islands {
+        for id in &isl.nodes {
+            if let Some(i) = world.nodes.iter().position(|n| &n.id == id) {
+                tour_order.push(i);
+            }
+        }
+    }
+    for i in 0..world.nodes.len() {
+        if !tour_order.contains(&i) {
+            tour_order.push(i);
+        }
+    }
+    commands.insert_resource(Game {
+        sim,
+        chosen: None,
+        next_level: 1,
+        guide_open: false,
+        outcome_seen: -1.0,
+        outcome_hidden: false,
+        notice: None,
+        tour: None,
+        tour_order,
+        history: load_history(),
+        recorded: false,
+    });
 }
 ```
 
@@ -544,19 +704,78 @@ fn mmss(s: f32) -> String {
 const FRAME_GAP: f32 = 34.0;
 ```
 
+### fn curve
+
+A link's path: straight within an island, a slack rope between islands.
+
+```rust
+fn curve(a: Vec2, b: Vec2, rope: bool) -> Vec<Vec2> {
+    if !rope {
+        return vec![a, b];
+    }
+    let sag = (a.distance(b) * 0.12).clamp(24.0, 120.0);
+    let c = (a + b) / 2.0 - Vec2::Y * sag * 2.0;
+    (0..=ROPE_SEGS)
+        .map(|k| {
+            let t = k as f32 / ROPE_SEGS as f32;
+            a * (1.0 - t) * (1.0 - t) + c * 2.0 * t * (1.0 - t) + b * t * t
+        })
+        .collect()
+}
+```
+
+### fn along
+
+Point and direction at fraction `k` along a path.
+
+```rust
+fn along(pts: &[Vec2], k: f32) -> (Vec2, Vec2) {
+    let n = pts.len() - 1;
+    let x = k.clamp(0.0, 1.0) * n as f32;
+    let i = (x as usize).min(n - 1);
+    (pts[i].lerp(pts[i + 1], x - i as f32), (pts[i + 1] - pts[i]).normalize_or_zero())
+}
+```
+
+### fn path_len
+
+```rust
+fn path_len(pts: &[Vec2]) -> f32 {
+    pts.windows(2).map(|w| w[0].distance(w[1])).sum()
+}
+```
+
+### fn plate
+
+A dark rounded plate behind map text so it reads against the jungle.
+
+```rust
+fn plate(art: &Art, size: Vec2, alpha: f32) -> impl Bundle {
+    (Sprite { image: art.pill.clone(), color: Color::srgba(0.0, 0.0, 0.0, alpha), custom_size: Some(size), ..default() }, Transform::from_xyz(0.0, 0.0, -0.005))
+}
+```
+
 ### fn spawn_overlay
 
 ```rust
-fn spawn_overlay(mut commands: Commands, game: Res<Game>, art: Res<Art>, cards: Query<(Entity, &NodeCard)>) {
+fn spawn_overlay(mut commands: Commands, game: Res<Game>, art: Res<Art>, world: Res<World>, cards: Query<(Entity, &NodeCard)>) {
+    let mut curves = Vec::new();
     for (i, &(a, b)) in game.sim.links.iter().enumerate() {
         let (pa, pb) = (game.vec(a), game.vec(b));
-        let d = pb - pa;
-        commands.spawn((
-            LinkLine(i),
-            Sprite::from_color(Color::WHITE, Vec2::new(d.length(), 2.0)),
-            Transform::from_translation(((pa + pb) / 2.0).extend(NODE_Z - 2.0)).with_rotation(Quat::from_rotation_z(d.to_angle())),
-        ));
-        let count = (d.length() / FRAME_GAP).max(1.0) as usize;
+        let rope = world.nodes[a].island != world.nodes[b].island;
+        let pts = curve(pa, pb, rope);
+        for w in pts.windows(2) {
+            let d = w[1] - w[0];
+            // Pieces overlap a little so the rope has no gaps at the joints.
+            let len = d.length() + if rope { 3.0 } else { 0.0 };
+            commands.spawn((
+                LinkLine { link: i, len, rope },
+                Sprite::from_color(Color::WHITE, Vec2::new(len, 2.0)),
+                Transform::from_translation(((w[0] + w[1]) / 2.0).extend(NODE_Z - 2.0)).with_rotation(Quat::from_rotation_z(d.to_angle())),
+            ));
+        }
+        let count = (path_len(&pts) / FRAME_GAP).max(1.0) as usize;
+        curves.push(pts);
         for forward in [true, false] {
             for k in 0..count {
                 commands.spawn((
@@ -567,17 +786,22 @@ fn spawn_overlay(mut commands: Commands, game: Res<Game>, art: Res<Art>, cards: 
             }
         }
     }
+    commands.insert_resource(LinkCurves(curves));
     for (e, card) in &cards {
         commands.entity(e).with_children(|c| {
             c.spawn((Badge(card.0), emoji_text(&art, "⚠️", 30.0), Transform::from_xyz(0.0, 62.0, 0.01).with_scale(Vec3::splat(0.5)), Visibility::Hidden))
-                .with_child((BadgeTtl(card.0), Text2d::new(""), art.text(true, 22.0), TextColor(RED_400), Transform::from_xyz(0.0, 40.0, 0.01)));
+                .with_children(|b| {
+                    b.spawn((BadgeTtl(card.0), Text2d::new(""), art.text(true, 22.0), TextColor(RED_400), Transform::from_xyz(0.0, 40.0, 0.01)))
+                        .with_child(plate(&art, Vec2::new(104.0, 32.0), 0.85));
+                });
         });
     }
     for (w, wk) in game.sim.workers.iter().enumerate() {
         commands
             .spawn((WorkerToken(w), emoji_text(&art, &wk.emoji, 34.0), Transform::from_translation(Vec2::from(wk.pos).extend(NODE_Z + 30.0)).with_scale(Vec3::splat(0.5))))
             .with_children(|c| {
-                c.spawn((Text2d::new(wk.name.to_uppercase()), art.text(true, 16.0), TextColor(TEXT), Transform::from_xyz(0.0, -36.0, 0.01)));
+                c.spawn((Text2d::new(wk.name.to_uppercase()), art.text(true, 16.0), TextColor(TEXT), Transform::from_xyz(0.0, -36.0, 0.01)))
+                    .with_child(plate(&art, Vec2::new(wk.name.len() as f32 * 11.0 + 20.0, 24.0), 0.75));
                 c.spawn((WorkBar(w), Sprite::from_color(Color::srgb(1.0, 0.85, 0.2), Vec2::new(60.0, 6.0)), Transform::from_xyz(0.0, -50.0, 0.01), Visibility::Hidden));
             });
     }
@@ -610,23 +834,40 @@ fn link_health(sim: &Sim, l: usize) -> Health {
 }
 ```
 
+### fn link_incident
+
+Is a live incident (not a warning, not held by a mitigation) on either end?
+
+```rust
+fn link_incident(sim: &Sim, l: usize) -> bool {
+    let (a, b) = sim.links[l];
+    [a, b].iter().any(|&n| sim.visible(n) && sim.faults[n].as_ref().is_some_and(|f| f.stage != Stage::Warning && f.mitigated <= 0.0))
+}
+```
+
 ### fn links
 
-Quiet by default; the selected node's neighbourhood and troubled links stand out.
+Ropes and lines: visible at rest, the selection highlighted, and any link touching a live incident bright red, thick and fully opaque.
 
 ```rust
 fn links(game: Res<Game>, view: Res<ViewState>, mut q: Query<(&LinkLine, &mut Sprite)>) {
-    for (link, mut sprite) in &mut q {
-        let focus = link_focus(&game, &view, link.0);
-        let selected = view.selected.is_some_and(|s| game.sim.links[link.0].0 == s || game.sim.links[link.0].1 == s);
-        sprite.color = match link_health(&game.sim, link.0) {
-            Health::Online if selected => GREEN_400.with_alpha(0.6),
-            Health::Online => GREEN_400.with_alpha(if focus { 0.25 } else { 0.08 }),
-            Health::Degraded => AMBER.with_alpha(if focus { 0.45 } else { 0.2 }),
-            Health::Unreachable => SLATE.with_alpha(0.15),
-            Health::Down => RED.with_alpha(0.3),
+    for (line, mut sprite) in &mut q {
+        let (a, b) = game.sim.links[line.link];
+        let selected = view.selected.is_some_and(|s| s == a || s == b);
+        let (color, width) = if link_incident(&game.sim, line.link) {
+            (RED, 5.0)
+        } else {
+            match link_health(&game.sim, line.link) {
+                Health::Down => (RED.with_alpha(0.9), 4.0),
+                Health::Degraded => (AMBER.with_alpha(0.8), 3.0),
+                Health::Unreachable => (SLATE.with_alpha(0.45), 2.0),
+                Health::Online if selected => (if line.rope { ROPE.lighter(0.15) } else { GREEN_400 }.with_alpha(0.95), 3.5),
+                Health::Online if line.rope => (ROPE.with_alpha(0.7), 3.0),
+                Health::Online => (GREEN_400.with_alpha(0.35), 2.0),
+            }
         };
-        sprite.custom_size = Some(Vec2::new(sprite.custom_size.map_or(1.0, |s| s.x), if selected { 3.0 } else { 2.0 }));
+        sprite.color = color;
+        sprite.custom_size = Some(Vec2::new(line.len, width));
     }
 }
 ```
@@ -636,34 +877,37 @@ fn links(game: Res<Game>, view: Res<ViewState>, mut q: Query<(&LinkLine, &mut Sp
 Frames ride each link both ways. A flood races red toward its victim; a down link stalls; unreachable links barely move; frames dim unless in focus.
 
 ```rust
-fn frames(game: Res<Game>, view: Res<ViewState>, time: Res<Time>, mut q: Query<(&LinkFrame, &mut Transform, &mut Sprite)>) {
+fn frames(game: Res<Game>, view: Res<ViewState>, time: Res<Time>, curves: Res<LinkCurves>, mut q: Query<(&LinkFrame, &mut Transform, &mut Sprite)>) {
     let t = time.elapsed_secs();
     let sim = &game.sim;
     for (f, mut tf, mut sprite) in &mut q {
         let (a, b) = sim.links[f.link];
         let health = link_health(sim, f.link);
         let flood = [a, b].into_iter().find(|&n| sim.faults[n].as_ref().is_some_and(|x| x.kind == "ddos" && x.stage != Stage::Warning && x.mitigated <= 0.0));
-        let len = game.vec(a).distance(game.vec(b)).max(1.0);
+        let pts = &curves.0[f.link];
+        let len = path_len(pts).max(1.0);
         let focus = link_focus(&game, &view, f.link);
-        let dim = if focus { 1.0 } else { 0.35 };
+        let dim = if focus { 1.0 } else { 0.55 };
         let (speed, color) = match (flood, health) {
             (Some(_), _) => (300.0, RED.with_alpha(0.9)),
+            (None, _) if link_incident(sim, f.link) => (20.0, RED),
             (None, Health::Down) => (0.0, RED.with_alpha(0.3 * dim)),
             (None, Health::Unreachable) => (8.0, SLATE.with_alpha(0.35 * dim)),
             (None, Health::Degraded) => (25.0, AMBER.with_alpha(0.8 * dim)),
             (None, Health::Online) => (60.0, Color::srgba(0.7, 1.0, 0.85, 0.75 * dim)),
         };
         let k = (t * speed / len + f.offset).fract();
-        let (from, to) = match flood {
-            Some(n) => (if n == a { b } else { a }, n),
-            None if f.forward => (a, b),
-            None => (b, a),
+        // Along the path from a to b (k) or back (1 - k); floods always run toward the victim.
+        let forward = match flood {
+            Some(n) => n == b,
+            None => f.forward,
         };
-        let dir = (game.vec(to) - game.vec(from)).normalize_or_zero();
-        let lane = Vec2::new(dir.y, -dir.x) * if flood.is_some() { 0.0 } else { 4.0 };
         let margin = (42.0 / len).min(0.45);
         let k = margin + k * (1.0 - 2.0 * margin);
-        tf.translation = (game.vec(from).lerp(game.vec(to), k) + lane).extend(NODE_Z - 1.0);
+        let (at, d) = along(pts, if forward { k } else { 1.0 - k });
+        let dir = if forward { d } else { -d };
+        let lane = Vec2::new(dir.y, -dir.x) * if flood.is_some() { 0.0 } else { 4.0 };
+        tf.translation = (at + lane).extend(NODE_Z - 1.0);
         tf.rotation = Quat::from_rotation_z(dir.to_angle());
         sprite.color = color;
     }
@@ -747,13 +991,14 @@ fn cards(
 fn worker_tokens(
     time: Res<Time>,
     game: Res<Game>,
-    mut tokens: Query<(&WorkerToken, &mut Transform), Without<WorkBar>>,
+    mut tokens: Query<(&WorkerToken, &mut Transform, &mut Visibility), Without<WorkBar>>,
     mut bars: Query<(&WorkBar, &mut Transform, &mut Visibility), Without<WorkerToken>>,
 ) {
     let t = time.elapsed_secs();
     let sim = &game.sim;
-    for (tok, mut tf) in &mut tokens {
+    for (tok, mut tf, mut vis) in &mut tokens {
         let w = &sim.workers[tok.0];
+        *vis = if w.active { Visibility::Inherited } else { Visibility::Hidden };
         let flies = sim.rules.workers[w.def].flies;
         let hop = if !w.walking() {
             if w.resting() { 0.0 } else { ((t * 2.0 + tok.0 as f32).sin() * 1.5).max(0.0) }
@@ -766,7 +1011,7 @@ fn worker_tokens(
             (std::f32::consts::PI * w.leg).sin() * peak
         };
         // Stand beside the card; each worker on its own side so they don't overlap.
-        let side = [Vec2::new(36.0, 30.0), Vec2::new(-36.0, 34.0), Vec2::new(0.0, -46.0)][tok.0 % 3];
+        let side = [Vec2::new(36.0, 30.0), Vec2::new(-36.0, 34.0), Vec2::new(0.0, -46.0), Vec2::new(40.0, -30.0)][tok.0 % 4];
         tf.translation = (Vec2::from(w.pos) + side + Vec2::Y * hop).extend(NODE_Z + 30.0 + tok.0 as f32 * 0.1);
         let sleepy: f32 = if w.resting() { 0.6 } else { 1.0 };
         tf.scale = Vec3::splat(0.5 * sleepy.max(0.85));
@@ -790,13 +1035,15 @@ fn worker_tokens(
 
 ```rust
 fn popup(commands: &mut Commands, art: &Art, at: Vec2, text: String, color: Color, now: f32) {
+    let w = text.chars().count() as f32 * 13.0 + 28.0;
     commands.spawn((
         Popup { born: now },
         Text2d::new(text),
         art.text(true, 22.0),
         TextColor(color),
         Transform::from_translation((at + Vec2::Y * 50.0).extend(NODE_Z + 50.0)).with_scale(Vec3::splat(0.5)),
-    ));
+    ))
+    .with_child(plate(art, Vec2::new(w, 34.0), 0.85));
 }
 ```
 
@@ -909,6 +1156,9 @@ Moving the selection: arrows hop to the nearest node in that direction (links pr
 
 ```rust
 fn navigate(keys: Res<ButtonInput<KeyCode>>, world: Res<World>, game: Res<Game>, mut view: ResMut<ViewState>) {
+    if game.tour.is_some() {
+        return;
+    }
     let from = view.selected.unwrap_or(game.sim.workers.first().map_or(0, |w| w.at));
     let mut pick = None;
     for (k, dir) in ARROWS {
@@ -969,13 +1219,38 @@ fn controls(
     roster_rows: Query<(&Interaction, &RosterRow), Changed<Interaction>>,
     ttl_box: Query<&Interaction, (With<TtlBox>, Changed<Interaction>)>,
     guide_button: Query<&Interaction, (With<GuideButton>, Changed<Interaction>)>,
+    practice_button: Query<&Interaction, (With<PracticeButton>, Changed<Interaction>)>,
+    tour_button: Query<&Interaction, (With<TourButton>, Changed<Interaction>)>,
 ) {
+    // The network tour: outside shifts, step through every node.
+    if let Some(i) = game.tour {
+        let n = game.tour_order.len();
+        let step = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) {
+            Some(1)
+        } else if keys.just_pressed(KeyCode::ArrowLeft) {
+            Some(n - 1)
+        } else {
+            None
+        };
+        if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyT) || tour_button.iter().any(|i| *i == Interaction::Pressed) {
+            game.tour = None;
+            return;
+        }
+        let i = step.map_or(i, |s| (i + s) % n);
+        if game.tour != Some(i) || view.selected != Some(game.tour_order[i]) {
+            game.tour = Some(i);
+            let node = game.tour_order[i];
+            view.selected = Some(node);
+            view.focus = Some(game.vec(node));
+        }
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyB) || guide_button.iter().any(|i| *i == Interaction::Pressed) {
         game.guide_open = !game.guide_open;
     }
     // Worker choice: Z/X/C or a roster row (again to clear).
     let mut choose = None;
-    for (n, k) in [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC].into_iter().enumerate() {
+    for (n, k) in [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC, KeyCode::KeyV].into_iter().enumerate() {
         if keys.just_pressed(k) && n < game.sim.workers.len() {
             choose = Some(n);
         }
@@ -994,13 +1269,33 @@ fn controls(
     }
     let running = game.sim.phase == Phase::Running;
     if !running {
-        if start_button.iter().any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) {
-            let level = game.next_level;
+        if keys.just_pressed(KeyCode::KeyT) || tour_button.iter().any(|i| *i == Interaction::Pressed) {
+            let first = game.tour_order[0];
+            game.tour = Some(0);
+            view.selected = Some(first);
+            view.focus = Some(game.vec(first));
+            return;
+        }
+        let practice = keys.just_pressed(KeyCode::KeyP) || practice_button.iter().any(|i| *i == Interaction::Pressed);
+        if practice || start_button.iter().any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) {
+            let level = if practice { 0 } else { game.next_level };
             game.sim.start(level);
             game.chosen = None;
             game.outcome_hidden = true;
+            game.recorded = false;
         }
         return;
+    }
+    if keys.just_pressed(KeyCode::KeyK) {
+        let w = game.chosen.filter(|&w| !game.sim.workers[w].active).or_else(|| game.sim.workers.iter().position(|w| !w.active));
+        match w {
+            Some(w) => {
+                if let Err(e) = game.sim.call_in(w) {
+                    game.err(e);
+                }
+            }
+            None => game.err("Everyone is already on shift"),
+        }
     }
     for (i, row) in &rows {
         if *i == Interaction::Pressed {
@@ -1130,7 +1425,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                 b.spawn((Node { width: percent(100), height: px(4), border_radius: BorderRadius::MAX, overflow: Overflow::clip(), ..default() }, BackgroundColor(GREEN_900.with_alpha(0.6))))
                     .with_child((HudBar, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GREEN_500)));
                 b.spawn((HintText, Text::new(""), art.text(true, 12.0), TextColor(AMBER)));
-                b.spawn(Node { column_gap: px(6), ..default() }).with_children(|r| {
+                b.spawn((StartRow, Node { column_gap: px(6), row_gap: px(6), flex_wrap: FlexWrap::Wrap, ..default() })).with_children(|r| {
                     r.spawn((
                         StartButton,
                         Interaction::default(),
@@ -1147,11 +1442,25 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                         BackgroundColor(GREEN_900.with_alpha(0.3)),
                         children![(Text::new("📖 Field guide (B)"), art.text(true, 12.0), TextColor(GREEN_300))],
                     ));
+                    for (label, practice) in [("🧪 Practice (P)", true), ("🧭 Tour the network (T)", false)] {
+                        let mut e = r.spawn((
+                            Interaction::default(),
+                            Node { padding: UiRect::axes(px(10), px(6)), border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                            BorderColor::all(Color::srgb(0.55, 0.8, 1.0).with_alpha(0.6)),
+                            BackgroundColor(Color::srgba(0.0, 0.1, 0.2, 0.6)),
+                            children![(Text::new(label), art.text(true, 12.0), TextColor(Color::srgb(0.7, 0.88, 1.0)))],
+                        ));
+                        if practice {
+                            e.insert(PracticeButton);
+                        } else {
+                            e.insert(TourButton);
+                        }
+                    }
                 });
             });
             // Roster.
             col.spawn((Blocks, Interaction::default(), boxed())).with_children(|b| {
-                b.spawn((Text::new("CREW · Z/X/C picks who goes (again: auto)"), art.text(true, 10.0), TextColor(GREEN_400.with_alpha(0.8))));
+                b.spawn((Text::new("CREW · Z/X/C/V picks who goes (again: auto) · K calls in help"), art.text(true, 10.0), TextColor(GREEN_400.with_alpha(0.8))));
                 for w in 0..game.sim.workers.len() {
                     b.spawn((
                         RosterRow(w),
@@ -1215,6 +1524,20 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                 children![(OutcomeText, Text::new(""), art.text(false, 12.0), TextColor(TEXT))],
             ));
         });
+    // Tour card.
+    commands
+        .spawn((Node { position_type: PositionType::Absolute, bottom: px(44), left: px(12), max_width: px(380), ..default() }, GlobalZIndex(46)))
+        .with_children(|c| {
+            c.spawn((
+                TourCard,
+                Blocks,
+                Interaction::default(),
+                Node { display: Display::None, padding: UiRect::axes(px(14), px(10)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(10)), ..default() },
+                BorderColor::all(Color::srgb(0.55, 0.8, 1.0)),
+                BackgroundColor(Color::srgb(0.0, 0.04, 0.08)),
+                children![(TourText, Text::new(""), art.text(false, 13.0), TextColor(TEXT))],
+            ));
+        });
     // Field guide.
     commands.spawn((
         GuidePanel,
@@ -1252,7 +1575,9 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                     display: Display::None,
                     flex_direction: FlexDirection::Column,
                     row_gap: px(10),
-                    max_width: px(560),
+                    max_width: px(640),
+                    max_height: percent(92),
+                    overflow: Overflow::scroll_y(),
                     margin: UiRect::all(px(12)),
                     padding: UiRect::all(px(18)),
                     border: UiRect::all(px(2)),
@@ -1272,8 +1597,62 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                     BackgroundColor(GREEN_900.with_alpha(0.6)),
                     children![(Text::new("NEXT SHIFT (Enter)"), art.text(true, 13.0), TextColor(GREEN_400))],
                 ));
+                p.spawn(Node { column_gap: px(8), ..default() }).with_children(|r| {
+                    r.spawn((
+                        PracticeButton,
+                        Interaction::default(),
+                        Node { flex_grow: 1.0, padding: UiRect::axes(px(12), px(8)), justify_content: JustifyContent::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                        BorderColor::all(Color::srgb(0.55, 0.8, 1.0)),
+                        BackgroundColor(Color::srgba(0.0, 0.1, 0.2, 0.6)),
+                        children![(Text::new("🧪 PRACTICE (P)"), art.text(true, 12.0), TextColor(Color::srgb(0.7, 0.88, 1.0)))],
+                    ));
+                    r.spawn((
+                        TourButton,
+                        Interaction::default(),
+                        Node { flex_grow: 1.0, padding: UiRect::axes(px(12), px(8)), justify_content: JustifyContent::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                        BorderColor::all(Color::srgb(0.55, 0.8, 1.0)),
+                        BackgroundColor(Color::srgba(0.0, 0.1, 0.2, 0.6)),
+                        children![(Text::new("🧭 TOUR (T)"), art.text(true, 12.0), TextColor(Color::srgb(0.7, 0.88, 1.0)))],
+                    ));
+                });
             });
         });
+}
+```
+
+### fn tour_card
+
+```rust
+fn tour_card(game: Res<Game>, world: Res<World>, mut card: Single<&mut Node, With<TourCard>>, text: Single<Entity, With<TourText>>, mut texts: Query<&mut Text>) {
+    let Some(i) = game.tour else {
+        card.display = Display::None;
+        return;
+    };
+    card.display = Display::Flex;
+    let sim = &game.sim;
+    let node = game.tour_order[i];
+    let n = &world.nodes[node];
+    let isl = world.islands.iter().find(|x| x.id == n.island).map_or(String::new(), |x| format!("{} {}", x.emoji, x.name));
+    let role = sim.rules.roles.get(&n.kind).cloned().unwrap_or_default();
+    let links: Vec<&str> = sim.neighbours[node].iter().map(|&j| sim.nodes[j].name.as_str()).collect();
+    let impact = if node == sim.core {
+        "It IS the core router: if it goes down, every other service loses its path.".to_string()
+    } else {
+        match sim.impact_if_down(node) {
+            0 => "If it goes down, nothing else is cut off: other paths route around it.".to_string(),
+            k => format!("If it goes down, {k} other service(s) lose their path to the core router."),
+        }
+    };
+    let s = format!(
+        "🧭 NETWORK TOUR {}/{} · {isl}\n{} {} ({})\n{role}\nLinks to: {}\n{impact}\n\n→ / Space: next   ← back   Esc: end the tour",
+        i + 1,
+        game.tour_order.len(),
+        n.emoji,
+        n.name,
+        n.kind,
+        links.join(", ")
+    );
+    set(&mut texts, *text, s);
 }
 ```
 
@@ -1302,8 +1681,10 @@ fn next_step(game: &Game, view: &ViewState) -> String {
         }
     }
     match sim.phase {
-        Phase::Idle => return "▶ Enter: start your first shift (training). Arrows hop nodes, B opens the field guide.".into(),
-        Phase::Done | Phase::Collapsed => return "▶ Shift over: read the summary, then Enter for the next one.".into(),
+        Phase::Idle if game.tour.is_some() => return "🧭 Touring: → next, ← back, Esc to stop. Nothing breaks during the tour.".into(),
+        Phase::Idle => return "▶ Enter: training shift · P: practice, no pressure · T: tour the network first".into(),
+        Phase::Done | Phase::Collapsed if game.tour.is_some() => return "🧭 Touring: → next, ← back, Esc to stop.".into(),
+        Phase::Done | Phase::Collapsed => return "▶ Shift over: read the summary, then Enter for the next one (P: practice, T: tour).".into(),
         Phase::Running => {}
     }
     if let Some(c) = sim.coach() {
@@ -1337,7 +1718,7 @@ fn hud(
     hint_text: Single<Entity, With<HintText>>,
     start_label: Single<Entity, With<StartLabel>>,
     mut bar: Single<(&mut Node, &mut BackgroundColor), With<HudBar>>,
-    mut start_node: Single<&mut Node, (With<StartButton>, Without<HudBar>)>,
+    mut start_node: Single<&mut Node, (With<StartRow>, Without<HudBar>)>,
 ) {
     let sim = &game.sim;
     let line = match sim.phase {
@@ -1369,35 +1750,33 @@ fn hud(
 
 ### fn ttl_box
 
-The big timer: the next consequence, calm when there is none. No blinking: urgency shows as colour, a label and the number itself.
+The big timer: the next consequence, calm when there is none. Red for a live incident, amber for a warning or a mitigation wearing off. No blinking: urgency shows as colour, a label and the number itself.
 
 ```rust
 fn ttl_box(
     game: Res<Game>,
     mut texts: Query<&mut Text>,
     mut colors: Query<&mut TextColor>,
+    mut fonts: Query<&mut TextFont>,
     title: Single<Entity, With<TtlTitle>>,
     time_e: Single<Entity, With<TtlTime>>,
     what: Single<Entity, With<TtlWhat>>,
-    mut boxq: Single<(&mut BorderColor, &mut Node), With<TtlBox>>,
+    mut boxq: Single<(&mut BorderColor, &mut Node, &mut BackgroundColor), With<TtlBox>>,
 ) {
     let sim = &game.sim;
-    let (border, node) = &mut *boxq;
-    node.display = if sim.phase == Phase::Running { Display::Flex } else { Display::None };
-    let (t, n, w, c) = match sim.deadline() {
+    let (border, node, bg) = &mut *boxq;
+    node.display = if sim.phase == Phase::Running && game.tour.is_none() { Display::Flex } else { Display::None };
+    let (t, n, w, c, back, big) = match sim.deadline() {
         Some(d) => {
-            let (label, c) = if d.secs <= 10.0 {
-                ("⏳ TIME TO LOSS · URGENT", RED_400)
-            } else if d.secs <= 30.0 {
-                ("⏳ TIME TO LOSS · SOON", AMBER)
-            } else {
-                ("⏳ TIME TO LOSS", GREEN_300)
-            };
+            let f = sim.faults[d.node].as_ref();
+            let warning = f.is_some_and(|f| f.is_warning() || f.mitigated > 0.0);
+            let (c, back) = if warning { (AMBER, Color::srgb(0.14, 0.09, 0.0)) } else { (RED, Color::srgb(0.17, 0.02, 0.02)) };
+            let label = if warning { "⏳ TIME TO LOSS · WARNING" } else if d.secs <= 10.0 { "⏳ TIME TO LOSS · NOW" } else { "⏳ TIME TO LOSS" };
             let more = urgent_order(sim).len().saturating_sub(1);
-            let more = if more > 0 { format!("  (+{more} more · Tab)") } else { String::new() };
-            (label.to_string(), mmss(d.secs), format!("Next impact: {} · {}{more}", sim.nodes[d.node].name, d.what), c)
+            let more = if more > 0 { format!("\n+{more} more open · Tab cycles") } else { String::new() };
+            (label.to_string(), mmss(d.secs), format!("Next impact: {}\n{}{more}", sim.nodes[d.node].name, d.what), c, back, 56.0)
         }
-        None => ("✓ ALL CLEAR".to_string(), String::new(), "No immediate threats".to_string(), GREEN_300),
+        None => ("✓ ALL CLEAR".to_string(), String::new(), "No immediate threats".to_string(), GREEN_300, Color::BLACK, 18.0),
     };
     set(&mut texts, *title, t);
     set(&mut texts, *time_e, n);
@@ -1407,7 +1786,14 @@ fn ttl_box(
             col.0 = c;
         }
     }
-    **border = BorderColor::all(c.with_alpha(0.7));
+    if let Ok(mut f) = fonts.get_mut(*time_e) {
+        if f.font_size != FontSize::Px(big) {
+            f.font_size = FontSize::Px(big);
+        }
+    }
+    **border = BorderColor::all(c);
+    node.border = UiRect::all(px(if c == GREEN_300 { 2.0 } else { 3.0 }));
+    bg.0 = back;
 }
 ```
 
@@ -1417,6 +1803,9 @@ fn ttl_box(
 fn worker_line(sim: &Sim, w: usize) -> String {
     let wk = &sim.workers[w];
     let d = &sim.rules.workers[wk.def];
+    if !wk.active {
+        return format!("{} {:<5} off shift · K: call in ({} 🍌)", wk.emoji, wk.name.to_uppercase(), sim.rules.call_cost);
+    }
     let stamina: String = (0..d.stamina).map(|i| if i < wk.stamina { '●' } else { '○' }).collect();
     let state = if wk.resting() {
         format!("💤 resting {:.0}s (R: 🍌 rally)", wk.rest)
@@ -1445,12 +1834,13 @@ fn worker_line(sim: &Sim, w: usize) -> String {
 ### fn roster
 
 ```rust
-fn roster(game: Res<Game>, mut texts: Query<(&RosterText, &mut Text)>, mut rows: Query<(&RosterRow, &mut BorderColor, &mut BackgroundColor)>) {
-    for (r, mut text) in &mut texts {
+fn roster(game: Res<Game>, mut texts: Query<(&RosterText, &mut Text, &mut TextColor)>, mut rows: Query<(&RosterRow, &mut BorderColor, &mut BackgroundColor)>) {
+    for (r, mut text, mut color) in &mut texts {
         let s = worker_line(&game.sim, r.0);
         if text.0 != s {
             text.0 = s;
         }
+        color.0 = if game.sim.workers[r.0].active { TEXT } else { Color::srgb(0.55, 0.6, 0.58) };
     }
     for (r, mut border, mut bg) in &mut rows {
         let on = game.chosen == Some(r.0);
@@ -1628,7 +2018,7 @@ fn outcome_card(
     if **interaction == Interaction::Pressed || keys.just_pressed(KeyCode::Escape) {
         game.outcome_hidden = true;
     }
-    let Some(o) = game.sim.outcome.clone().filter(|o| !game.outcome_hidden && game.sim.clock - o.t < 9.0 && game.sim.phase == Phase::Running) else {
+    let Some(o) = game.sim.outcome.clone().filter(|o| !game.outcome_hidden && game.tour.is_none() && game.sim.clock - o.t < 9.0 && game.sim.phase == Phase::Running) else {
         node.display = Display::None;
         return;
     };
@@ -1686,26 +2076,65 @@ fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMu
 ```rust
 fn summary(mut game: ResMut<Game>, mut panel: Single<&mut Node, With<SummaryPanel>>, text: Single<Entity, With<SummaryText>>, mut texts: Query<&mut Text>) {
     let over = matches!(game.sim.phase, Phase::Done | Phase::Collapsed);
-    panel.display = if over { Display::Flex } else { Display::None };
+    panel.display = if over && game.tour.is_none() { Display::Flex } else { Display::None };
     if !over {
         return;
     }
-    let sim = &game.sim;
-    let title = if sim.phase == Phase::Done {
-        format!("🌅 SHIFT COMPLETE · 17:00 · {}", sim.level_def().name)
-    } else {
-        format!("💥 SHIFT ENDED EARLY · major outage at {}", clock_str(sim.clock, sim.rules.shift_secs))
-    };
-    let mut s = format!("{title}\n★ {}\n\n", sim.score);
-    for l in sim.summary() {
-        s += &l;
-        s.push('\n');
+    // Record the shift once, in this browser's score history.
+    if !game.recorded {
+        game.recorded = true;
+        let sim = &game.sim;
+        let entry = Played { name: sim.level_def().name.clone(), score: sim.score, sla: sim.sla, met: sim.phase == Phase::Done && sim.sla >= sim.rules.sla_target };
+        game.history.push(entry);
+        let keep = game.history.len().saturating_sub(20);
+        game.history.drain(0..keep);
+        save_history(&game.history);
+        let levels = game.sim.rules.director.levels.len();
+        // Practice doesn't move you along; a completed shift does.
+        let met = game.sim.phase == Phase::Done && game.sim.sla >= game.sim.rules.sla_target;
+        if game.sim.level > 0 && met {
+            game.next_level = (game.sim.level + 1).min(levels - 1);
+        }
     }
-    let next = if sim.phase == Phase::Done { game.sim.level + 1 } else { game.sim.level };
+    let sim = &game.sim;
+    let title = if sim.phase == Phase::Done && sim.sla >= sim.rules.sla_target {
+        format!("🌅 SHIFT COMPLETE · SLA met · {}", sim.level_def().name)
+    } else if sim.phase == Phase::Done {
+        format!("🌇 SHIFT OVER · SLA target missed ({:.1}% of {:.0}%) · {}", sim.sla, sim.rules.sla_target, sim.level_def().name)
+    } else {
+        format!("💥 GAME OVER · major outage at {} · {}", clock_str(sim.clock, sim.rules.shift_secs), sim.level_def().name)
+    };
+    let st = &sim.stats;
+    let mut s = format!(
+        "{title}\n\n★ SCORE {}  =  fixes {}  +  prevention {}  +  combo bonus {}\n",
+        sim.score, st.points_fix, st.points_prevent, st.points_combo
+    );
+    for l in sim.summary() {
+        s += &format!("{l}\n");
+    }
+    s += "\n✅ WHAT WENT RIGHT\n";
+    if sim.notes_good.is_empty() {
+        s += "  • Nothing fixed or prevented yet: Space jumps to an alert, I diagnoses.\n";
+    }
+    for n in sim.notes_good.iter().take(6) {
+        s += &format!("  • {n}\n");
+    }
+    s += "\n⚠ WHAT WENT WRONG\n";
+    if sim.notes_bad.is_empty() {
+        s += "  • Nothing. Clean shift.\n";
+    }
+    for n in sim.notes_bad.iter().take(6) {
+        s += &format!("  • {n}\n");
+    }
+    s += "\n🏆 YOUR SHIFTS (this browser)\n";
+    let best = game.history.iter().map(|p| p.score).max().unwrap_or(0);
+    for (k, p) in game.history.iter().enumerate().rev().take(6) {
+        let mark = if p.score == best && best > 0 { " ← best" } else { "" };
+        s += &format!("  #{:<2} {:<22} ★ {:>5}  SLA {:>5.1}% {}{mark}\n", k + 1, p.name, p.score, p.sla, if p.met { "✓" } else { "✗" });
+    }
     let levels = sim.rules.director.levels.len();
-    s += &format!("\nNext: {}", sim.rules.director.levels[next.min(levels - 1)].name);
+    s += &format!("\nNext: {} (levels advance when the SLA target is met)", sim.rules.director.levels[game.next_level.min(levels - 1)].name);
     set(&mut texts, *text, s);
-    game.next_level = next.min(levels - 1);
 }
 ```
 
@@ -1974,8 +2403,8 @@ fn apply_link(link: Res<crate::link::DeepLink>, mut game: ResMut<Game>, mut view
     if !(link.shift || incident.is_some() || warning.is_some()) {
         return;
     }
-    // Staged scenes start a regular shift (no training script).
-    let level = if incident.is_some() || warning.is_some() { 1 } else { 0 };
+    // Staged scenes start a regular shift (no training script); #shift starts training.
+    let level = if incident.is_some() || warning.is_some() { 2 } else { 1 };
     game.sim.start(level);
     if let Some(i) = node {
         if let Some(k) = incident {

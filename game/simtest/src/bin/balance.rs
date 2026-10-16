@@ -4,7 +4,7 @@ use lm_simtest::{play, Policy};
 fn main() {
     let seeds: Vec<u64> = (1..=20).collect();
     println!("level policy    done  SLA(avg/min)  roots  maxOpen(avg/worst)  crit-s  resolved  prevented  avgRec  spreads  outages  busy%");
-    for level in 0..3 {
+    for level in 0..4 {
         for policy in [Policy::Idle, Policy::Novice, Policy::Beginner, Policy::Expert] {
             let runs: Vec<_> = seeds.iter().map(|&s| play(s, level, policy).0).collect();
             let n = runs.len() as f32;
