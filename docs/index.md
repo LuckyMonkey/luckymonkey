@@ -31,6 +31,7 @@ These pages explain every part of the game: what it does, how it works and
 | [Build, deploy and test](build-deploy.md) | Toolchain, `tools/deploy.sh` step by step, hosting, the browser test rig, troubleshooting |
 | [Outside assets and dependencies](assets.md) | Every third-party library, font, image and tool: what it is, where it comes from, licence, why it is used |
 | [Decisions and known issues](decisions.md) | Why things are the way they are, bugs found and fixed, open problems, roadmap |
+| [Isometric engine extraction report](extraction-report.md) | For reusing the renderer elsewhere: every subsystem, exact maths, assets, coupling, a proposed host API and a step-by-step extraction plan (answer to the `bevy.md` brief) |
 | [Extending the game](extending.md) | Recipes: add a node, a failure type, an action, an emoji; tune balance |
 
 ## Thirty-second summary
