@@ -49,6 +49,7 @@ pub struct FaultDef {
     pub emoji: String,
     pub name: String,
     /// Taxonomy group: network, security, systems, operations, advanced.
+    #[allow(dead_code)]
     pub group: String,
     pub symptom: String,
     /// Seconds from incident to the node going down.
@@ -350,12 +351,14 @@ impl Worker {
     pub fn walking(&self) -> bool {
         !self.path.is_empty()
     }
+    #[allow(dead_code)]
     pub fn working(&self) -> bool {
         self.queue.front().is_some_and(|t| t.started)
     }
     pub fn resting(&self) -> bool {
         self.rest > 0.0
     }
+    #[allow(dead_code)]
     pub fn idle(&self) -> bool {
         !self.walking() && self.queue.is_empty() && !self.resting()
     }
@@ -413,6 +416,7 @@ pub struct Event {
     pub icon: String,
     pub text: String,
     pub node: Option<usize>,
+    #[allow(dead_code)]
     pub worker: Option<usize>,
     /// Same group within a few seconds merges into one line with a count.
     pub group: Option<String>,
@@ -669,6 +673,7 @@ impl Sim {
     pub fn fault_def(&self, node: usize) -> Option<&FaultDef> {
         self.faults[node].as_ref().and_then(|f| self.rules.fault(&f.kind))
     }
+    #[allow(dead_code)]
     pub fn open_roots(&self) -> usize {
         self.faults.iter().flatten().filter(|f| f.id == f.root).count()
     }

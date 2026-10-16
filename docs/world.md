@@ -9,37 +9,38 @@ title: Lucky Monkey - the world
 
 ![The Guardian's stepped pyramid at the centre of the map](img/pyramid.png)
 
-## From TypeScript to the wasm: the map's journey
+## The archipelago
 
-The map is still *defined* in the original TypeScript,
-[`lib/world-data.ts`](source/world-data.md), with the critter roster in
-[`lib/npc-data.ts`](source/npc-data.md). Rather than rewrite those generators in
-Rust, [`tools/export-world.cjs`](source/export-world.md) runs them and writes JSON:
+![Overview: islands at different heights, the river, rope links](img/oncall-overview.png)
 
-    lib/world-data.ts ──(TypeScript compiler, in memory)──▶ run ──▶ game/assets/world.json
-    lib/npc-data.ts   ─────────────────────────────────────────────▶ game/assets/npcs.json
+The map is **data you can edit**: [`game/data/islands.json`](build-deploy.md#live_data)
+places the islands and [`nodes.json`](nodes.md) defines the nodes.
+`tools/gen-world.py` turns them into `world.json` (tiles, nodes, decorations,
+streams) in about a second, and `tools/deploy.sh data` puts it live without a
+Rust build.
 
-The export borrows the [TypeScript](https://www.typescriptlang.org) compiler from
-the [shared fridge-next runtime](:git:next-runtime:start) to transpile each file
-and runs it in Node. `world.json` (117 KB) holds:
+- **One river, void to void.** It falls in from the void at the top (height 11),
+  runs through Lagoon Heights, Canopy Ridge, Temple Isle, Digital Shore, Banana
+  Grove and the Data Lake, and spills off the far edge (height 0). Where an island
+  is higher than the water, the river cuts a **canyon**.
+- **Two vine bridges** join island pairs (Temple ↔ Banana, Canopy ↔ Shore).
+- **Two free-floating islands**, Ember Isle 🌋 and Watch Isle 🔭, touch nothing.
+  Their links reach them as ropes across the void.
+- **Verticality:** island heights 1 to 9 with stepped `hills`, and small islets
+  up to height 9, so the islands read as separate floating masses.
+- **Nodes** are placed by offsets from their island's centre. One that lands on
+  water or void is nudged to the nearest bank.
+- **Pixel vines** hang from exposed grass, platform and temple edges, clustered by
+  a hash and kept clear of the nodes.
+- The generator's seed is **8675309**, so the same JSON always gives the same world.
 
-| Field | Contents |
-|---|---|
-| `tiles` | every cell `{x, y, type, height}`, plus `fall` (waterfall) and `lagoon` flags |
-| `nodes` | the 28 nodes: id, name, type, IP, emoji, description, position, connections, status, security level, assets |
-| `decorations` | trees, flowers, crystals… `{type, position}` |
-| `streams` | the two river centrelines (main river, Digital River), upstream first |
+The node lore and the per-island list are in [Nodes and lore](nodes.md).
 
-At startup Rust parses it with [serde](https://serde.rs) from
-`include_str!`, which bakes the file into the binary at compile time
-([`world::plugin`](source/world.md#fn_plugin); the types are
-[`WorldFile`](source/world.md#struct_worldfile),
-[`NodeData`](source/world.md#struct_nodedata), [`Tile`](source/world.md#struct_tile)).
-
-**Why keep TypeScript as the source:** it was the existing, working map, built from
-a seeded generator. Porting it would have risked a different world for no gain;
-the export keeps one source of truth. The seed is **8675309**, so the world is
-identical every time.
+**History:** the map used to come from the original TypeScript generators
+(`lib/world-data.ts` via `tools/export-world.cjs`), with load-time repairs for an
+upside-down pyramid and a river that floated in the void. The owner wanted
+separate floating islands joined by jungle and river, so the map became data.
+`world.json` carries `baked: true` and the old repairs are skipped.
 
 ## The isometric maths
 
@@ -106,39 +107,18 @@ Taller tiles are tinted slightly brighter ([`fn top_tint`](source/world.md#fn_to
 so terraces read at a glance. Then each row's mesh is placed at z = x + y.
 [Why that works](engine.md#renderingdepth_in_a_2d_isometric_world).
 
-## Clean-ups applied when loading
+## The river and the links
 
-The TypeScript generators have quirks. [`world::plugin`](source/world.md#fn_plugin)
-repairs them as it loads:
+The river's centreline is exported as `streams`, and data frames float down it.
+The **links between nodes** are drawn on top of the world
+([`fn spawn_overlay`](source/ops.md#fn_spawn_overlay)):
 
-- **Duplicates:** several generators write the same cell. The **tallest wins**, so
-  stacked platforms read as solid ground. Water keeps its waterfall and lagoon flags.
-- **The upside-down pyramid:** the temple generator gave the widest layer the
-  greatest height. The loader rebuilds it as a stepped pyramid: height =
-  6 − (the lowest layer covering the cell). The centre, where the Guardian sits,
-  becomes the summit.
-  ▶ [see it](https://go.fridge.run/luckymonkey#node=monkey-statue&zoom=1.1)
-- **The floating river:** the river was generated alone and looked like it floated
-  in the void. Every water cell now gets:
-  - a full ring of grass around it, at the water's height;
-  - a *ragged* second ring (45% of cells, chosen by hash), so the edge is not a ruler line;
-  - a bush, tree, flower, bamboo or rock on 22% of the new bank cells.
-
-  It deliberately stops there: the owner wants the void visible.
-
-## The rivers
-
-- The **main river** starts at a waterfall at the top (x 20, y −5, height 5) and
-  steps down to height 0. It runs south through bends to a delta at y 45, where the
-  CDN Canopy stands. The Logical Lagoon joins it at (17, 7).
-  ▶ [the waterfall](https://go.fridge.run/luckymonkey#node=mq-falls&zoom=1.6)
-- The **Digital River** leaves the small lagoon at (7, 12), runs down the west edge
-  (x = 1), and bends east into the **Data Lake** at (11, 38). It also includes the
-  channel from the main river along y = 12.
-  ▶ [the Data Lake](https://go.fridge.run/luckymonkey#node=data-lake&zoom=1.4)
-
-Both rivers are three tiles wide. Their centrelines are exported as `streams`
-for the floating frames below.
+- links inside an island are straight; links **between islands are slack ropes**
+  ([`fn curve`](source/ops.md#fn_curve): a quadratic sag, 14 segments), tan at 70%
+  opacity, so the archipelago reads as islands strung together;
+- data frames ride along each link's curve;
+- a link touching a live incident turns **bright red, 5 px, fully opaque**
+  ([`fn links`](source/ops.md#fn_links)), so you can see the trouble from across the map.
 
 ## Water effects
 
@@ -160,9 +140,9 @@ for the floating frames below.
   [`fn emoji_text`](source/world.md#fn_emoji_text)): 🌴 🌸 🌿 💎 🎋 🍄 🪷 🪨.
   Lotus grows only on water and everything else only on land. A small hashed jitter
   stops them sitting in a perfect grid.
-- **Edge islands:** ten faint teal diamond clusters float at the map's edges
-  ([`fn spawn_islands`](source/world.md#fn_spawn_islands)), suggesting more network beyond.
-- **The void:** `grid_background.png` is tiled behind everything at 35% opacity
+- **Islets:** small floating rocks scattered between the islands, some with a tree.
+- **The void:** `grid_background.png` is tiled behind everything at 35% opacity, drawn large
+  (each tile 0.6 of its size in world units) so it reads as a distant grid, not fine noise
   ([`fn spawn_backdrop`](source/world.md#fn_spawn_backdrop)).
 
 ## Node cards
@@ -174,7 +154,7 @@ Each node is an 80×80 rounded card ([`fn spawn_nodes`](source/world.md#fn_spawn
 - a name label, cut to 10 characters plus "..".
 
 It stands at the node's ground height. The game adds an alert badge and countdown
-as children ([Simulation](simulation.md#visual_feedback_driven_by_the_model)). Card
+as children ([Simulation](world.md#the_river_and_the_links)). Card
 colour follows health: normal, pulsing amber (unstable), dark red-brown (down).
 
 ## Critters
@@ -203,9 +183,9 @@ emoji inside, in three sizes (80×40, 120×55, 160×75).
 - Rain clouds drop five streaks: the original `rain-drop` keyframes
   ([`fn rain`](source/clouds.md#fn_rain)).
 - Storm clouds flash every 4-9 s ([`fn storm`](source/clouds.md#fn_storm)). Over
-  0.6 s the pill ramps to yellow, a yellow glow swells behind it, and ⚡ appears.
+  0.6 s the pill itself ramps to yellow and ⚡ appears (no glow: the owner preferred the plain pill).
   At the peak a [`Strike`](source/clouds.md#struct_strike) message goes out, which
-  [can knock out a node](failures.md#lightning_strike).
+  [can knock out a node](failures.md#lightning).
 
 **Their history is a small saga.** The port first replaced the divs with
 "realistic" textured clouds with ground shadows. The owner said those lost the

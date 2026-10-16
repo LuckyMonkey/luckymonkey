@@ -22,12 +22,12 @@ The game turns that into something you can play in a lunch break:
   river (🪷), a monitoring watchtower (🔭), a temple pyramid with the Lucky Monkey
   Guardian on top (🐵).
 - **The API connections are vines.** Little data frames stream along every link,
-  both ways ([how](simulation.md#visual_feedback_driven_by_the_model)).
+  both ways ([how](world.md#the_river_and_the_links)).
 - **The rivers are data too.** Frames float down the main river and the
   *Digital River*, which ends in the *Data Lake* ([how](world.md#the_rivers)).
 - **The weather is a hazard.** Storm clouds flash yellow and can knock a node's
   power out ([how](world.md#clouds)).
-- **You are the monkey (🐒).** You walk the links, and every fix takes time.
+- **You run a crew** (🐵 🦜 🦥 🐸). They walk or fly the links, and every fix takes time.
   ([How to play](gameplay.md).)
 
 ## History: three renderers in three weeks
@@ -40,6 +40,7 @@ Each step is one commit in the repository.
 | 2026-09-24 | `a10d835` | **Cleaned up and sped up:** v0 scaffolding removed, hidden type errors fixed, a faster renderer using [Pixi.js](https://pixijs.com) (a 2D WebGL drawing library), moved onto the shared [fridge-next runtime](:git:next-runtime:start). This was version 0.2. |
 | 2026-10-15 | `182ece0` | **Ported to Bevy.** Rust compiled to WebAssembly; Next.js now only hosts the canvas. Two visual bugs the owner disliked were fixed on the way: tiles that never lined up, and a pyramid built upside down ([Decisions](decisions.md#bugs_found_and_fixed_in_the_port)). |
 | 2026-10-15 | `579f0f6` | **First game loop** (a turn-based quiz), water animations, river banks, and the old-style clouds back after the owner said the new realistic ones "lost the charm". |
+| 2026-10-16 | `oncall` | **On-call:** the sim split out of Bevy, an incident director, a crew of four, Time to Loss, root causes vs impacts, mitigation vs fix, training/practice/tour, node lore, the archipelago with one river and rope links, game-over notes and shift history. |
 | 2026-10-15 | `48ca8d3` | **Game loop v2:** the walking monkey, timed fixes, TTL countdowns, Watchtower forecasts, frame streams, the Digital River continued into the Data Lake, and seven new places. |
 | 2026-10-15 | `88608ff` | **Deep links:** URLs that open the game at a node with a problem staged, used all over these docs. |
 
@@ -94,7 +95,11 @@ The costs were known up front:
 | `game/src/npc.rs` | wandering critters | [source](source/npc.md) |
 | `game/src/view.rs` | camera, input, picking | [source](source/view.md) · [explained](interface.md#camera) |
 | `game/src/ui.rs` | welcome screen, node panel, zoom buttons | [source](source/ui.md) |
-| `game/src/ops.rs` | **the game**: failures, network, shift, monkey, HUD | [source](source/ops.md) · [explained](simulation.md) |
+| `game/src/sim.rs` | **the rules**: faults, director, crew, health, scoring (no Bevy; tested natively) | [source](source/sim.md) · [explained](simulation.md) |
+| `game/src/ops.rs` | **the game screen**: HUD, Time to Loss, map overlays, edge pins, input → orders | [source](source/ops.md) |
+| `game/src/data.rs` | live JSON loading with built-in fallbacks | [source](source/data.md) |
+| `game/data/*.json` | every rule, number, island and node: [live data](build-deploy.md#live_data) | [nodes](nodes.md) · [faults](failures.md) |
+| `game/simtest/` | rule tests + balancing bots | [testing](build-deploy.md#testing) |
 | `game/src/link.rs` | deep links from the URL hash | [source](source/link.md) |
 | `game/Cargo.toml` | Rust crate: Bevy features, release profile | [source](source/cargo-toml.md) |
 | `lib/world-data.ts` | **the map source** (TypeScript generators) | [source](source/world-data.md) · [explained](world.md#from_typescript_to_the_wasmthe_map_s_journey) |

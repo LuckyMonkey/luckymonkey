@@ -413,7 +413,7 @@ fn panel(
                 left: if wide { Val::Auto } else { px(16) },
                 right: px(16),
                 width: if wide { px(384) } else { Val::Auto },
-                max_height: Val::Vh(86.0),
+                max_height: Val::Vh(if windows.iter().next().is_some_and(|w| w.width() < 600.0) { 55.0 } else { 86.0 }),
                 overflow: Overflow::scroll_y(),
                 flex_direction: FlexDirection::Column,
                 border: UiRect::all(px(1)),

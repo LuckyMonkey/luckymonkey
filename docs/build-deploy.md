@@ -10,9 +10,28 @@ title: Lucky Monkey - build, deploy and test
 
     tools/deploy.sh          # regenerate assets, build on fridge, deploy, restart
     tools/deploy.sh build    # stop after the build (output: fridge:~/build/luckymonkey/public/game)
+    tools/deploy.sh data     # push game/data/*.json live in seconds: no Rust build, no restart
 
 Run it on freezer from the repo root. It needs SSH as `fridge@fridge` (key
 login) and, for the deploy half, the askpass helper on fridge for `sudo -A`.
+
+## Live data
+
+Everything you'd want to tune is JSON in `game/data/`, fetched by the page at
+startup ([`data.rs`](source/data.md)):
+
+| File | Holds |
+|---|---|
+| `tuning.json` | faults, responses, actions, crew, levels, the training script, concepts, notices, roles, every number |
+| `islands.json` | the archipelago: islands, heights, hills, the river, bridges, islets |
+| `nodes.json` | the 28 nodes: names, emoji, IPs, connections, lore |
+| `world.json` | generated from the two above by `tools/gen-world.py`; don't edit by hand |
+| `npcs.json` | the wandering critters |
+
+Edit, then `tools/deploy.sh data`: it regenerates `world.json`, checks every file
+is valid JSON, and copies them live. Reload the page. A partial `tuning.json`
+works (it's merged over the built-in copy), and a broken one falls back to the
+built-in copy with a console warning, so a typo can't take the game down.
 
 ## Why the build happens on fridge
 
@@ -41,7 +60,8 @@ Freezer needs: Node (for `export-world.cjs`; it borrows TypeScript from
 
 ## What [`tools/deploy.sh`](source/deploy-sh.md) does, step by step
 
-1. [`node tools/export-world.cjs`](source/export-world.md): regenerate `game/assets/world.json` and `npcs.json` from `lib/*.ts`.
+1. `python3 tools/gen-world.py`: build `game/data/world.json` from `islands.json` + `nodes.json`; then validate every JSON file.
+   `python3 tools/gen-docs.py` regenerates [Failure types](failures.md) and [Nodes and lore](nodes.md) from the same data.
 2. [`python3 tools/make-textures.py`](source/make-textures.md): regenerate `tiles.png`, `card.png`, `card_border.png`.
 3. `rsync` the repo to `fridge:~/build/luckymonkey/` (excluding `node_modules`,
    `.next`, `.git`, `game/target`, `public/game`).
@@ -81,7 +101,14 @@ compressed; `luckymonkey.js` about 106 KB.
 
 ## Testing
 
-There are no unit tests; the game is checked by playing it in a real browser.
+**The rules** are tested natively: `game/simtest/` compiles `game/src/sim.rs` without Bevy.
+
+    ssh fridge@fridge 'cd build/luckymonkey/game/simtest && ~/.cargo/bin/cargo test --release'
+    ssh fridge@fridge 'cd build/luckymonkey/game/simtest && ~/.cargo/bin/cargo run --release --bin balance'
+
+12 tests (A-L: root vs impact, mitigation, director budget, spreading, training script, crew, scoring…) and a balancing table, explained in [The simulation](simulation.md#tests_and_balancing).
+
+**The rendering** is checked by playing it in a real browser.
 
     tools/browser-test.sh                                   # the live site
     tools/browser-test.sh http://127.0.0.1:8791/ ./out      # a local copy

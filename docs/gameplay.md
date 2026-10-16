@@ -4,196 +4,157 @@ title: Lucky Monkey - how to play
 
 # How to play
 
-> One monkey. One shift. Twenty-eight things that can break.
+> You're on call for a jungle. Eight hours, a crew of animals, and a network that
+> breaks the way real ones do.
 
-Everything on this page is implemented in [`game/src/ops.rs`](source/ops.md). The
-numbers are the real constants from the code, so this page doubles as the game's
-balance sheet; each number links to where it lives.
+**▶ [Start the training shift](https://go.fridge.run/luckymonkey#shift)** ·
+**▶ [Try a DDoS right now](https://go.fridge.run/luckymonkey#node=banana-sector&incident=ddos&zoom=1.2)**
 
-**▶ [Start a shift right now](https://go.fridge.run/luckymonkey#shift)**
+The rules live in [`game/src/sim.rs`](source/sim.md) (no graphics, fully tested),
+and every number lives in [`game/data/tuning.json`](build-deploy.md#live_data). You can
+change the number in the JSON and see the result in seconds, with no rebuild.
+[Failure types](failures.md) and [Nodes and lore](nodes.md) are generated from
+that data.
 
-## The goal
+![An incident: the red Time to Loss timer, red rope links, the node panel with fixes](img/oncall-red-links.png)
 
-Survive one on-call **shift**, 09:00 to 17:00 on the in-game clock, with SLA left.
+## Learn the network before you play
 
-- The shift lasts **480 real seconds**: one game hour per real minute
-  ([`SHIFT_SECS`](source/ops.md#const_shift_secs)).
-- **SLA** ([service level agreement](https://en.wikipedia.org/wiki/Service-level_agreement),
-  the promise of how much uptime you deliver) starts at **100%**.
-- At **0** the shift is lost: "SLA breached".
-- At 17:00 you win, plus a bonus of **SLA × 10** points ([`fn clock`](source/ops.md#fn_clock)).
+Nothing breaks until you press **START**. Before that you can:
 
-**Why a clock and not turns:** the first version was turn-based, with a turn bar
-that drained in a few seconds. That made it a reaction quiz. The owner wanted to
-"move, take action with a TTL countdown … solve problems proactively, but also
-have problems happen that you have to be reactive with". A day-long shift with
-its own countdown on every problem gives room to plan *and* moments of panic.
-
-## Starting
-
-1. The welcome screen ("LUCKY MONKEY MEDIA … WARNING") is atmosphere from the
-   original design. Press **PROCEED** or **Enter**.
-2. You are in sandbox mode: pan, zoom, click nodes and read about them.
-3. Press **START SHIFT** or **Enter**. Every node resets to online
-   ([`fn start`](source/ops.md#fn_start)).
-
-## You are the monkey
-
-![The monkey has been ordered to a node and is walking the links; the HUD shows where it is going and what it will do](img/walking.png)
-
-A 🐒 starts beside the Lucky Monkey Guardian. Only the monkey can fix things, and
-only where it stands.
-
-- **Walking:** along the links at **240 px/s** ([`LINK_SPEED`](source/ops.md#const_link_speed)),
-  by the shortest route ([`fn route`](source/ops.md#fn_route),
-  [Dijkstra's algorithm](https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm);
-  the fridge's [Algorithms course](https://go.fridge.run/certs/t/algo) covers it).
-  - The monkey **cannot pass through a down node**, though it can walk *to* one.
-  - Links touching an unstable node count double length and are walked at half speed.
-- **Hiking:** if the network is cut and no route exists, the monkey walks straight
-  across country at **70 px/s** ([`HIKE_SPEED`](source/ops.md#const_hike_speed)).
-  The HUD says "hiking overland".
-- **Working:** every fix takes time on site ([table below](#choosing_a_fix)), shown
-  as a yellow bar under the monkey ([`fn monkey_token`](source/ops.md#fn_monkey_token)).
-  A node that is already **down** takes **1.5×** as long: a cold start.
-- **Ordering:** pick a fix on *any* node and the monkey walks there, then does it
-  ([`impl Monkey`](source/ops.md#impl_monkey), [`fn walk`](source/ops.md#fn_walk),
-  [`fn work`](source/ops.md#fn_work)).
-  - A new order replaces the old one.
-  - A leg already being walked is finished first: no teleporting.
-
-**Why travel matters:** it forces you to prioritise. With one engineer and three
-alerts, the question is *which first*, and whether a down node now blocks your
-route to the others. That is the real job.
-
-## Incidents (reactive)
-
-🚨
-
-![A DDoS incident: red frames, the panel with symptoms and fixes](img/ddos.png)
-
-An incident breaks a node immediately. The card turns **unstable** (pulsing amber),
-and a badge with the failure emoji and a red countdown floats above it.
-
-- When the countdown (**TTL**, time to live) reaches 0, the node goes **down**
-  (dark card) and the countdown restarts at **40 s**.
-- **Worms** then crawl to a random healthy neighbour, and **DDoS stampedes**
-  spill onto one. They repeat this every time the 40 s runs out.
-- **Replica disparity** that goes down costs an extra **6% SLA** at once (the data is lost).
-- Anything else stays down, shown as **DOWN**, until fixed.
-
-Countdowns ([`Failure::ttl`](source/ops.md#impl_failure)):
-
-| Failure | TTL | | Failure | TTL |
-|---|---|---|---|---|
-| 🐘 DDoS stampede | 30 s | | 🔐 Expired certificate | 40 s |
-| 🐛 Worm | 35 s | | 🍌 Memory leak | 45 s |
-| ⚖️ Replica disparity | 50 s | | 💾 Disk full | 40 s |
-| 📦 Bad deploy (either kind) | 45 s | | ⚡ Lightning strike | 28 s |
-
-What each one means and which fix is right: [Failure types](failures.md).
-
-## Forecasts (proactive)
-
-🔮
-
-![An amber forecast on the Auth Gate: the certificate is about to expire](img/forecast.png)
-
-The **Canopy Watchtower** (🔭, the monitoring node) sees some trouble coming. A
-forecast puts an amber badge and "in 52s" over a node that is still healthy.
-Do the *preventive* action before the countdown ends and the incident never
-happens. Otherwise it turns into the real thing.
-
-| Forecast | Prevent with | If ignored becomes |
+| Key | Mode | What it is |
 |---|---|---|
-| 🔐 certificate about to expire | 🔑 Rotate the certificate | Expired certificate |
-| 📅 deploy scheduled | 🐤 Canary the deploy | Bad deploy *or* Bad deploy + migration (50/50, revealed when it hits) |
-| 💾 disk filling (data stores) | 🧹 Clean up old snapshots | Disk full |
-| 🧬 worm signature in the wild | 🩹 Patch the node | Worm |
+| **T** | Tour | Walks island by island through all 28 nodes: what each one *is* in plain words, its lore, what it links to, and how many services would lose their path if it went down. → / Space next, ← back, Esc ends. |
+| **P** | Practice | One problem at a time, timers ×3, nothing spreads, no early game over, full crew. Doesn't count toward levels. |
+| **B** | Field guide | Every concept the game has taught you so far, with the example where you met it. |
 
-Forecast countdowns run **50-80 s**, long enough to plan a route
-([`fn forecast`](source/ops.md#fn_forecast)).
+Click any node at any time: its panel shows its **role**, **lore**, **connections**
+and **impact if down**.
 
-**If the Watchtower goes down, you fly blind:**
-- forecasts vanish from the map;
-- the alert list says "Watchtower down: no forecasts";
-- the HUD shows 🔮 `?`.
+## The shift
 
-The forecasts still exist and still hit ([`Net::sighted`](source/ops.md#impl_net)).
-This makes the monitoring node worth protecting, which is the lesson. More on
-monitoring: [SRE: Reliability engineering](https://go.fridge.run/certs/learn/sre?n=4)
-and Matt's guide to
-[events, monitoring and infrastructure as code](https://go.fridge.run/certs/learn/matt?n=3).
+- 09:00 to 17:00 on the clock, **480 real seconds** (`shift_secs`).
+- **Network health** is right now: each node counts 1 online, 0.5 degraded,
+  0.3 unreachable, 0 down, weighted by how critical it is.
+- **Shift SLA** is the *average* health over the shift so far. The target is
+  **95%** (`sla_target`). That's the score that decides whether you pass.
+- Health under **25%** for **45 s** (`outage_floor`, `outage_secs`) ends the shift
+  early: **GAME OVER · major outage**.
 
-## Choosing a fix
+### Levels
 
-Click a node with an alert, or press **Space** to jump to the most urgent one.
-The panel on the right shows the symptoms and **four options** on keys **1-4**
-([`fn alert_box`](source/ops.md#fn_alert_box)).
-
-- Exactly one option is right.
-- For a bad deploy, both *Roll back* and *Fall forward* are always offered,
-  because telling them apart is the lesson ([why](failures.md#bad_deployroll_back_or_fall_forward)).
-- A **wrong** fix costs the time it took, **2% SLA**, and (for incidents)
-  **8 s** off the countdown. The option is greyed out so you cannot repeat it.
-
-Work times ([`Action::secs`](source/ops.md#impl_action)):
-
-| Action | Seconds | | Action | Seconds |
-|---|---|---|---|---|
-| 🛡️ Rate-limit at the firewall | 3 | | 🔌 Fail over to standby | 4 |
-| 🚧 Quarantine the node | 2.5 | | 🔑 Rotate the certificate | 3 |
-| 🔁 Resync replicas from primary | 7 | | 🔄 Restart the service | 3 |
-| ⏪ Roll back the deploy | 5 | | 🐤 Canary the deploy | 5 |
-| ⏩ Fall forward: ship a hotfix | 8 | | 🧹 Clean up old snapshots | 4 |
-| 🩹 Patch the node | 4 | | | |
-
-## The SLA drains while things are broken
-
-Every second ([`fn clock`](source/ops.md#fn_clock)), the SLA loses:
-- **0.04%** per unstable node;
-- **0.2%** per down node.
-
-One node down for a minute costs 12%; three down for a minute cost 36%. Wrong
-fixes (−2) and lost data (−6) come on top.
-
-## How often trouble comes
-
-- First incident at **6 s**, first forecast at **14 s**.
-- After that, a new **incident** every *(26 − 14p) × random(0.7-1.3)* seconds. *p* is
-  shift progress, from 0 at 09:00 to 1 at 17:00. That is about every 26 s in the
-  morning and every 12 s by the end of the day.
-- A new **forecast** every *(30 − 14p) × random(0.7-1.3)* seconds.
-- New trouble lands on a random node that is online with no alert. Data stores
-  get *replica disparity* (40% of their incidents) and *disk full* forecasts (50%).
-  Other incidents are DDoS (half), worm or memory leak.
-- **Lightning:** a storm cloud's flash lands 60 px below it. A node within **110 px**
-  has a **50%** chance of losing power ([`fn strikes`](source/ops.md#fn_strikes)).
-
-## Scoring ★
-
-| Event | Points | Code |
+| Level | Crew | Pressure |
 |---|---|---|
-| Incident fixed | 100 + 2 × seconds left on its countdown | [`fn work`](source/ops.md#fn_work) |
-| Forecast prevented | 150 | [`fn work`](source/ops.md#fn_work) |
-| Shift survived | SLA × 10 | [`fn clock`](source/ops.md#fn_clock) |
+| Practice | 🐵 🦜 🦥 🐸 | one problem at a time, timers ×3 |
+| Shift 1: training | 🐵 Mango, 🦜 Pip | a scripted first hour that teaches as it goes (crash → DNS → certificate warning → two at once), then gentle random trouble |
+| Shift 2 | + 🦥 Moss | up to 3 root causes at once by the afternoon |
+| Shift 3+ | + 🐸 Fern | 2 → 4 at once, timers ×0.85 |
 
-Prevention pays more than cure, because it is the behaviour worth rewarding.
+You only move up a level by **meeting the SLA target**.
 
-## Controls
+## Your crew
 
-| Input | Does | Code |
-|---|---|---|
-| Drag (mouse or one finger) | Pan the map | [`fn mouse`](source/view.md#fn_mouse), [`fn touch`](source/view.md#fn_touch) |
-| Wheel, pinch, **+**/**−** buttons or keys | Zoom 50%-250% | [`fn zoom_about`](source/view.md#fn_zoom_about) |
-| Arrows / **WASD** | Pan | [`fn keys`](source/view.md#fn_keys) |
-| Click / tap a node | Select it (opens the panel) | [`fn pick`](source/view.md#fn_pick) |
-| Click an alert row | Select that node and fly the camera to it | [`fn controls`](source/ops.md#fn_controls) |
-| **Space** | Most urgent alert (incidents before forecasts, then shortest countdown) | [`fn controls`](source/ops.md#fn_controls) |
-| **1-4** | Order the monkey to do that fix on the selected node | [`fn controls`](source/ops.md#fn_controls) |
-| **G** or "Send the monkey here" | Walk to the selected node without a fix | [`fn controls`](source/ops.md#fn_controls) |
-| **F** | Fly the camera to the monkey | [`fn follow`](source/view.md#fn_follow) |
-| **Esc** | Close the panel | [`fn keys`](source/view.md#fn_keys) |
-| **Enter** | Proceed / start shift / new shift | [`fn proceed`](source/ui.md#fn_proceed), [`fn controls`](source/ops.md#fn_controls) |
+| | Moves | Good at | Can't |
+|---|---|---|---|
+| 🐵 **Mango**, monkey | walks the links | anything; swings on a vine for 🍌 1 (J) | — |
+| 🦜 **Pip**, parrot | flies straight over the void, fastest | diagnosis at 2× | heavy work (deploys, databases) |
+| 🦥 **Moss**, sloth | slow | preventive maintenance at 2× (certificates, patches, clean-ups, canaries) | — |
+| 🐸 **Fern**, tree frog | hops fast | hardware at 2× (cables, vents, power) | — |
 
-Next: [Failure types](failures.md) · Back to the [documentation](index.md)
+- Each worker has **stamina** (●●●○○) and rests when it runs out. **R** rallies a
+  resting worker for 🍌 2.
+- Each has a queue of up to 3 jobs. **Backspace** cancels the last.
+- **Z / X / C / V** choose who takes the next order. With nobody chosen, the
+  game sends whoever can arrive and finish first.
+- Someone **off shift** can be called in with **K** for 🍌 3.
+
+Bananas come from fixes and preventions. You start with 2.
+
+## Trouble
+
+Every problem is **a root cause on one node**. What it does to everything else is
+an **impact**: when a router goes down, the services behind it go
+**unreachable**. They don't get their own incident, and they recover by
+themselves when the path comes back. Fix the cause and not the symptoms.
+
+- **Warning** (amber, e.g. 📅 a deploy is scheduled, 🔐 a certificate expires
+  soon): nothing is broken yet. Prevent it in time for bonus points and bananas.
+- **Incident** (red): the node is degraded. Its **Time to Loss** counts down; at 0
+  it goes **down**.
+- **Down**: a worm or a flood can now **spread** once, 30 s later.
+
+The **big Time to Loss timer** at the top always shows the *next* consequence on
+the whole network, whether a warning turning into an incident, a node going
+down, a mitigation wearing off, or a spread. Click it to fly there. It's a game
+term: [not IP TTL and not DNS TTL](glossary.md).
+
+### Responding
+
+Open a node (click, Space for the most urgent, Tab to cycle) and pick one of four
+responses (**1-4**):
+
+- ✅ **Fix**: removes the root cause.
+- 🩹 **Mitigate**: buys time (e.g. rate-limiting a DDoS for 40 s). The fault comes back.
+- ✖ **No effect**: a real tool for a different problem. It costs the time and
+  your combo, and the outcome card explains *why*, so you learn something.
+- 🔍 **Diagnose (I)**: a worker inspects first. Every option is then labelled with
+  what it would do, and the concept goes into your field guide.
+
+Every outcome pops a card: **RESOLVED / MITIGATED / NO EFFECT / DIAGNOSED**, with
+the cause, what was done, and what to learn.
+
+## The director: why it never piles on unfairly
+
+New problems are dealt by an incident director
+([`director`](source/sim.md#impl_sim)) that waits until all of these are true:
+- it's been 15 s since your last fix;
+- open root causes are under the level's budget (outages left down still count, so
+  ignoring trouble has a cost);
+- network health is above 60%.
+
+Critical infrastructure (router, DNS, auth, firewall, databases) is chosen less
+often, and never in practice. Lightning from storm clouds goes through the same
+budget.
+
+## Score and the end of the shift
+
+![The shift summary: score breakdown, what went right and wrong, your shift history](img/oncall-gameover.png)
+
+Points come from fixes, preventions (worth more), the Time to Loss left when you
+acted, and a combo for consecutive right calls. The end screen shows:
+
+- a title: **SHIFT COMPLETE · SLA met**, **SHIFT OVER · SLA target missed**, or **GAME OVER · major outage**;
+- the score broken down;
+- ✅ **what went right** and ⚠ **what went wrong**, as specific events, e.g.
+  "Main Router went down when its Time to Loss ran out, cutting off 27 other services";
+- a tip;
+- 🏆 your last 20 shifts in this browser.
+
+## All the keys
+
+| Key | Does |
+|---|---|
+| Enter | start the shift / go |
+| Space | jump to the most urgent problem |
+| Tab | cycle open problems |
+| 1-4 | pick a response |
+| I | diagnose |
+| G | send the chosen worker here, no job |
+| Z X C V | choose a worker |
+| K | call in an off-shift worker (🍌 3) |
+| R | rally a resting worker (🍌 2) |
+| J | vine swing: Mango jumps to the selected node (🍌 1) |
+| Backspace | cancel the chosen worker's last job |
+| F | follow the chosen worker |
+| arrows | hop to the nearest node in that direction |
+| Q / E | previous / next island |
+| WASD, drag | pan · wheel, pinch, +/− zoom |
+| T · P · B | tour · practice · field guide |
+
+Nodes off screen become **pins on the screen edge** in their direction, coloured
+by health. Click a pin to fly there.
+
+**On a phone:** drag to pan, pinch to zoom, tap a node, tap a response. The Time to
+Loss timer sits across the top, and the node panel takes the lower half.
+
+Next: [Failure types](failures.md) · [The simulation](simulation.md) · Back to the [documentation](index.md)

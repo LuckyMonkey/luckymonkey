@@ -33,28 +33,49 @@ The colours are constants at the top of `ui.rs` (`GREEN_300` …).
 
 ## Layout
 
-![The node panel docked right with an incident; HUD and alert list on the left](img/incident.png)
+![An incident: Time to Loss at the top, the crew and alerts on the left, the node panel on the right](img/oncall-red-links.png)
 
-- **Shift HUD** (top left, [`fn spawn_hud`](source/ops.md#fn_spawn_hud),
-  [`fn hud`](source/ops.md#fn_hud)): clock, SLA, score, alert counts, a
-  shift-progress bar (red under 30% SLA), what the monkey is doing, and
-  START / NEW SHIFT.
-- **Alert list** (under it, [`fn alert_list`](source/ops.md#fn_alert_list)): up to
-  seven rows, incidents first, then shortest countdown. Click a row to select the
-  node and fly there.
-  - Rebuilt only when `Net.version` changes.
-  - The countdown texts are updated every frame separately
-    ([`fn live_ttls`](source/ops.md#fn_live_ttls)), so nothing is rebuilt per frame.
-- **Log:** the last five events, each shown for 15 s.
-- **Zoom** (top right): + / − and the percentage.
-- **Hint bar** (bottom left): the keys.
-- **Node panel** ([`fn panel`](source/ui.md#fn_panel)):
-  - **Where:** on the **right** on screens 900 px and wider; full width at the bottom on narrow screens.
-  - **INFO tab:** the alert box ([`fn alert_box`](source/ops.md#fn_alert_box)) or
-    a "Send the monkey here" button, then the description, live status, connections
-    and security level.
-  - **ASSETS tab:** the node's fictional files.
-  - **Rebuilt** when the selection, the tab or `Net.version` changes.
+Wide screens:
+
+- **Left column** ([`fn spawn_hud`](source/ops.md#fn_spawn_hud)), top to bottom:
+  - **HUD:** shift clock → 17:00 with a progress bar, ★ score, combo, 🍌,
+    **NETWORK HEALTH** and **SHIFT SLA** (against the target), and a coach line
+    that always says the next sensible step.
+  - **Start row:** START / 📖 Field guide (B) / Practice (P) / Tour (T).
+  - **Crew roster:** one row per worker with stamina dots and what they're doing
+    ("→ DNS Shrine 4s, then 📛 Restore…"). Z/X/C/V or click to choose.
+    Off-shift workers show "K: call in".
+  - **Alert list:** WARN / INC / HELD (mitigated) / DOWN tags, live countdowns,
+    "+N more". Click to fly there.
+  - **NETWORK LOG:** the shared event stream, grouped (one line for "27 services
+    unreachable"), urgent lines kept longer. Click a line to fly to its node.
+- **Time to Loss** (top, next to the column, [`fn ttl_box`](source/ops.md#fn_ttl_box)):
+  big red numbers on a dark red plate for an incident, amber for a warning, a
+  small green **✓ ALL CLEAR** otherwise. It names the node and what happens at 0.
+  Click to fly there.
+- **Node panel** ([`fn panel`](source/ui.md#fn_panel)), right side, scrolls with
+  the wheel: status header, then the urgent block
+  ([`fn alert_box`](source/ops.md#fn_alert_box): symptom, the four responses with
+  what's known about each, diagnose, who will go and when they arrive), then
+  description, connections, **Role**, **impact if down**, **Lore**, About, Security.
+- **Outcome card** (bottom centre): RESOLVED / MITIGATED / NO EFFECT / DIAGNOSED,
+  with the cause, the action, and what to learn.
+- **Tour card** (bottom left) during the tour; **field guide** and **shift
+  summary** as overlays.
+- **Edge pins** ([`fn pins`](source/ops.md#fn_pins)): every node that's off
+  screen becomes its own icon pinned to the screen edge in its direction, with the
+  border coloured by health. Pins on one edge are pushed apart so they never stack.
+  Click one to fly there. Back on screen, the pin disappears and the card is
+  the node again.
+- **Zoom** (top right) and the **hint bar** (bottom left).
+
+Map text (countdown badges, popups, worker names, island names) sits on dark
+plates so it reads over grass, water and lava alike.
+
+**Narrow screens (under 760 px):** the column is 300 px and Time to Loss moves to
+the top right. **Phones (under 600 px):** Time to Loss runs across the top, the
+column fills the width under it without the log, and the node panel takes at most
+the lower 55% of the screen.
 
 ## Camera
 
@@ -93,11 +114,14 @@ the welcome screen.
 | `&forecast=<kind>` | …or that forecast | [`#node=auth-gate&forecast=cert`](https://go.fridge.run/luckymonkey#node=auth-gate&forecast=cert&zoom=1.3) |
 | `#shift` | skip the welcome screen and start a shift | [`#shift`](https://go.fridge.run/luckymonkey#shift) |
 
-- **Incident kinds:** `ddos`, `worm`, `disparity`, `deploy`, `migration`,
-  `lightning`, `cert`, `leak`, `disk`.
-- **Forecast kinds:** `cert`, `deploy`, `disk`, `worm`.
+- **Incident kinds:** any fault key in `tuning.json`: `crash`, `dns`, `dhcp`,
+  `cable`, `route`, `ddos`, `worm`, `cert`, `leak`, `disk`, `heat`, `power` (or
+  `lightning`), `deploy`, `migration`, `disparity`, `loop`, `broadcast`, `vlan`
+  ([all of them](failures.md)).
+- **Forecast kinds:** faults with a warning stage: `worm`, `cert`, `disk`, `deploy`.
+- A staged link starts **Shift 2** (no training script); `#shift` starts **training**.
 - **Node ids:** see [the node table](assets.md#what_is_whatthe_nodes).
-- A staged problem gets 25 s of stage time before the day's own trouble starts.
+- The director's grace period gives a staged problem the stage before other trouble arrives.
 
 These links are why every page in these docs can say "▶ live". They are also how
 the screenshots were framed. And the hash is currently the **only** way a host page

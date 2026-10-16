@@ -4,7 +4,7 @@ title: Lucky Monkey source - ops.rs
 
 # Source: game/src/ops.rs
 
-**The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD.** Explained in [simulation](../simulation.md). 1786 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ops.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders.** Explained in [gameplay](../gameplay.md). 1873 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ops.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -59,6 +59,7 @@ workers, edge pins).
 | [struct RosterRow](#struct_rosterrow) |  |
 | [struct RosterText](#struct_rostertext) |  |
 | [struct AlertList](#struct_alertlist) |  |
+| [struct HudColumn](#struct_hudcolumn) | The left HUD column; edge pins keep out of it. `top` is its offset from the top. |
 | [struct AlertRow](#struct_alertrow) |  |
 | [struct Feed](#struct_feed) |  |
 | [struct FeedRow](#struct_feedrow) |  |
@@ -129,6 +130,7 @@ workers, edge pins).
 | [const PIN_MARGIN](#const_pin_margin) |  |
 | [fn spawn_pins](#fn_spawn_pins) |  |
 | [fn pins](#fn_pins) | Nodes out of view turn into their icon, stuck to the screen edge in the |
+| [fn phone_column](#fn_phone_column) | Phones: the node panel takes the lower half and the column would show through |
 | [fn pin_clicks](#fn_pin_clicks) |  |
 | [fn apply_link](#fn_apply_link) |  |
 
@@ -465,6 +467,17 @@ struct RosterText(usize);
 struct AlertList;
 ```
 
+### struct HudColumn
+
+The left HUD column; edge pins keep out of it. `top` is its offset from the top.
+
+```rust
+#[derive(Component)]
+struct HudColumn {
+    top: f32,
+}
+```
+
 ### struct AlertRow
 
 ```rust
@@ -610,7 +623,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
         .add_systems(Update, (links, frames, cards, popups, worker_tokens))
-        .add_systems(Update, (pins, pin_clicks, outcome_card, guide, summary, tour_card).run_if(in_state(Screen::Playing)))
+        .add_systems(Update, (phone_column, pins, pin_clicks, outcome_card, guide, summary, tour_card).run_if(in_state(Screen::Playing)))
         .add_systems(
             Update,
             (navigate, controls, tick, strikes, hud, ttl_box, roster, alert_list, feed, live_ttls).chain().run_if(in_state(Screen::Playing)),
@@ -1403,20 +1416,26 @@ fn boxed() -> impl Bundle {
 
 ```rust
 fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Query<&Window>) {
-    let narrow = windows.iter().next().is_some_and(|w| w.width() < 760.0);
+    let width = windows.iter().next().map_or(1280.0, |w| w.width());
+    let narrow = width < 760.0;
+    // Phones: the Time to Loss timer runs across the top, the column sits under it
+    // without the log, and the node panel (ui.rs) keeps to the lower half.
+    let phone = width < 600.0;
     // Left column: shift status, roster, open alerts, event feed.
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: px(12),
+                top: px(if phone { 100.0 } else { 12.0 }),
                 left: px(12),
-                width: px(if narrow { 300.0 } else { 380.0 }),
+                right: if phone { px(12) } else { Val::Auto },
+                width: if phone { Val::Auto } else { px(if narrow { 300.0 } else { 380.0 }) },
                 max_width: percent(92),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(6),
                 ..default()
             },
+            HudColumn { top: if phone { 100.0 } else { 12.0 } },
             GlobalZIndex(40),
         ))
         .with_children(|col| {
@@ -1473,13 +1492,18 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                 }
             });
             col.spawn((AlertList, Blocks, Interaction::default(), Node { flex_direction: FlexDirection::Column, row_gap: px(3), ..default() }));
-            col.spawn((Feed, Blocks, Interaction::default(), boxed()));
+            let mut feed = col.spawn((Feed, Blocks, Interaction::default(), boxed()));
+            if phone {
+                feed.insert(Node { display: Display::None, ..default() });
+            }
         });
     // Top centre: the Time to Loss timer.
     commands
         .spawn((
             // Wide: between the left column and the node panel. Narrow: under the left column's top box.
-            if narrow {
+            if phone {
+                Node { position_type: PositionType::Absolute, top: px(8), left: px(0), right: px(0), justify_content: JustifyContent::Center, ..default() }
+            } else if narrow {
                 Node { position_type: PositionType::Absolute, top: px(12), right: px(60), ..default() }
             } else {
                 Node { position_type: PositionType::Absolute, top: px(12), left: px(404), ..default() }
@@ -1495,8 +1519,9 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     padding: UiRect::axes(px(16), px(8)),
-                    min_width: px(220),
-                    max_width: px(330),
+                    // Fits between the left column (404) and the node panel (right 400) on mid-width screens.
+                    min_width: px(if narrow { 220.0 } else { (width - 812.0).clamp(180.0, 220.0) }),
+                    max_width: px(if narrow { 330.0 } else { (width - 812.0).clamp(180.0, 330.0) }),
                     border: UiRect::all(px(2)),
                     border_radius: BorderRadius::all(px(10)),
                     ..default()
@@ -1512,7 +1537,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
         });
     // Outcome card: bottom centre.
     commands
-        .spawn((Node { position_type: PositionType::Absolute, bottom: px(44), left: px(0), right: px(0), justify_content: JustifyContent::Center, ..default() }, GlobalZIndex(45)))
+        .spawn((Node { position_type: PositionType::Absolute, bottom: px(56), left: px(0), right: px(0), justify_content: JustifyContent::Center, ..default() }, GlobalZIndex(45)))
         .with_children(|c| {
             c.spawn((
                 OutcomeCard,
@@ -1526,7 +1551,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
         });
     // Tour card.
     commands
-        .spawn((Node { position_type: PositionType::Absolute, bottom: px(44), left: px(12), max_width: px(380), ..default() }, GlobalZIndex(46)))
+        .spawn((Node { position_type: PositionType::Absolute, bottom: px(56), left: px(12), right: px(12), max_width: px(380), ..default() }, GlobalZIndex(46)))
         .with_children(|c| {
             c.spawn((
                 TourCard,
@@ -1755,6 +1780,7 @@ The big timer: the next consequence, calm when there is none. Red for a live inc
 ```rust
 fn ttl_box(
     game: Res<Game>,
+    windows: Query<&Window>,
     mut texts: Query<&mut Text>,
     mut colors: Query<&mut TextColor>,
     mut fonts: Query<&mut TextFont>,
@@ -1764,6 +1790,7 @@ fn ttl_box(
     mut boxq: Single<(&mut BorderColor, &mut Node, &mut BackgroundColor), With<TtlBox>>,
 ) {
     let sim = &game.sim;
+    let phone = windows.iter().next().is_some_and(|w| w.width() < 600.0);
     let (border, node, bg) = &mut *boxq;
     node.display = if sim.phase == Phase::Running && game.tour.is_none() { Display::Flex } else { Display::None };
     let (t, n, w, c, back, big) = match sim.deadline() {
@@ -1774,7 +1801,7 @@ fn ttl_box(
             let label = if warning { "⏳ TIME TO LOSS · WARNING" } else if d.secs <= 10.0 { "⏳ TIME TO LOSS · NOW" } else { "⏳ TIME TO LOSS" };
             let more = urgent_order(sim).len().saturating_sub(1);
             let more = if more > 0 { format!("\n+{more} more open · Tab cycles") } else { String::new() };
-            (label.to_string(), mmss(d.secs), format!("Next impact: {}\n{}{more}", sim.nodes[d.node].name, d.what), c, back, 56.0)
+            (label.to_string(), mmss(d.secs), format!("Next impact: {}\n{}{more}", sim.nodes[d.node].name, d.what), c, back, if phone { 34.0 } else { 56.0 })
         }
         None => ("✓ ALL CLEAR".to_string(), String::new(), "No immediate threats".to_string(), GREEN_300, Color::BLACK, 18.0),
     };
@@ -2335,6 +2362,7 @@ fn pins(
     game: Res<Game>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
+    column: Query<(&HudColumn, &ComputedNode)>,
     mut q: Query<(&EdgePin, &mut Node, &mut BorderColor)>,
 ) {
     let (cam, cam_tf) = *camera;
@@ -2342,19 +2370,73 @@ fn pins(
     let (lo, hi) = (Vec2::splat(PIN_MARGIN + PIN / 2.0), size - Vec2::new(PIN_MARGIN + PIN / 2.0, 40.0 + PIN / 2.0));
     let centre = (lo + hi) / 2.0;
     let half = (hi - lo) / 2.0;
-    for (pin, mut node, mut border) in &mut q {
+    // Where each off-screen node meets the edge, grouped by edge (0 left, 1 right, 2 top, 3 bottom).
+    let mut edges: [Vec<(usize, f32)>; 4] = Default::default();
+    for (pin, _, _) in &q {
         let Ok(p) = cam.world_to_viewport(cam_tf, game.vec(pin.0).extend(0.0)) else { continue };
-        let inside = p.x > -20.0 && p.y > -20.0 && p.x < size.x + 20.0 && p.y < size.y + 20.0;
-        if inside {
-            node.display = Display::None;
+        if p.x > -20.0 && p.y > -20.0 && p.x < size.x + 20.0 && p.y < size.y + 20.0 {
             continue;
         }
         let d = p - centre;
         let t = (half.x / d.x.abs().max(1e-3)).min(half.y / d.y.abs().max(1e-3));
-        let at = centre + d * t - Vec2::splat(PIN / 2.0);
+        let e = centre + d * t;
+        if (e.x - lo.x).abs() < 0.5 {
+            edges[0].push((pin.0, e.y));
+        } else if (e.x - hi.x).abs() < 0.5 {
+            edges[1].push((pin.0, e.y));
+        } else if (e.y - lo.y).abs() < 0.5 {
+            edges[2].push((pin.0, e.x));
+        } else {
+            edges[3].push((pin.0, e.x));
+        }
+    }
+    // Pins on one edge never stack: push them apart along it, then back inside.
+    let gap = PIN + 4.0;
+    // Pins under the HUD column couldn't be clicked: the left edge starts below it, the top edge right of it.
+    let (col_right, col_bottom) = column.iter().next().map_or((0.0, 0.0), |(c, n)| {
+        let sz = n.size() * n.inverse_scale_factor();
+        (12.0 + sz.x, c.top + sz.y)
+    });
+    let mut at: Vec<Option<Vec2>> = vec![None; game.sim.health.len()];
+    for (k, list) in edges.iter_mut().enumerate() {
+        let (min, max) = match k {
+            0 => ((col_bottom + 8.0 + PIN / 2.0).max(lo.y), hi.y),
+            1 => (lo.y, hi.y),
+            2 => ((col_right + 8.0 + PIN / 2.0).max(lo.x), hi.x),
+            _ => (lo.x, hi.x),
+        };
+        let min = min.min(max);
+        list.sort_by(|a, b| a.1.total_cmp(&b.1));
+        for l in list.iter_mut() {
+            l.1 = l.1.max(min);
+        }
+        for j in 1..list.len() {
+            list[j].1 = list[j].1.max(list[j - 1].1 + gap);
+        }
+        if let Some(last) = list.last().map(|l| l.1) {
+            let over = (last - max).max(0.0);
+            for l in list.iter_mut() {
+                l.1 = (l.1 - over).max(min);
+            }
+        }
+        for &(i, v) in list.iter() {
+            let c = match k {
+                0 => Vec2::new(lo.x, v),
+                1 => Vec2::new(hi.x, v),
+                2 => Vec2::new(v, lo.y),
+                _ => Vec2::new(v, hi.y),
+            };
+            at[i] = Some(c - Vec2::splat(PIN / 2.0));
+        }
+    }
+    for (pin, mut node, mut border) in &mut q {
+        let Some(p) = at.get(pin.0).copied().flatten() else {
+            node.display = Display::None;
+            continue;
+        };
         node.display = Display::Flex;
-        node.left = px(at.x);
-        node.top = px(at.y);
+        node.left = px(p.x);
+        node.top = px(p.y);
         let sim = &game.sim;
         let c = match sim.health[pin.0] {
             Health::Down => RED,
@@ -2364,6 +2446,22 @@ fn pins(
             Health::Online => GREEN_400.with_alpha(0.7),
         };
         *border = BorderColor::all(c);
+    }
+}
+```
+
+### fn phone_column
+
+Phones: the node panel takes the lower half and the column would show through it, so the column steps aside while a node is open (Time to Loss stays on top).
+
+```rust
+fn phone_column(view: Res<ViewState>, window: Single<&Window>, mut q: Query<&mut Node, With<HudColumn>>) {
+    let hide = window.width() < 600.0 && view.selected.is_some();
+    for mut node in &mut q {
+        let d = if hide { Display::None } else { Display::Flex };
+        if node.display != d {
+            node.display = d;
+        }
     }
 }
 ```

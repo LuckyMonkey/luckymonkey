@@ -5,7 +5,7 @@ title: Lucky Monkey - on-call design (director, crew, Time to Loss)
 # On-call design pass
 
 Why the game plays the way it does after the pacing/education pass, and where
-each rule lives. Status: **built and tested locally, not deployed.**
+each rule lives. Status: **live** at <https://go.fridge.run/luckymonkey> (deployed 2026-10-16).
 
 ## Architecture
 
@@ -56,6 +56,7 @@ IP TTL (hop count) or DNS TTL (cache lifetime). The shift clock is separate.
 | 🐵 Mango, monkey | walks the links (300 px/s), vine swing for 🍌 | everything, normal speed | — |
 | 🦜 Pip, parrot | flies straight over the void (420 px/s) | diagnosis at 2× speed | heavy hands-on work |
 | 🦥 Moss, sloth | slow walker (110 px/s) | preventive maintenance at 2× | — (other work 1.2× slower) |
+| 🐸 Fern, tree frog | hops fast (360 px/s) | hardware at 2× (cables, vents, power) | — |
 
 Each has stamina (jobs before a rest) and a queue of up to 3 jobs. Dispatch,
 arrival, work, results and rests all go to the shared network log. Bananas are
@@ -75,15 +76,17 @@ Expert (knows the fix, uses every worker). SLA target 95%.
 
 | level | policy | done | SLA avg/min | roots | max open avg/worst | resolved | avg recovery |
 |---|---|---|---|---|---|---|---|
-| 0 | Idle | 20/20 | 91.6/91.6 | 5.0 | 5.0/5 | 0 | — |
-| 0 | Novice | 20/20 | 99.6/99.4 | 12.6 | 2.0/2 | 6.4 | 24 s |
-| 0 | Expert | 20/20 | 99.8/99.8 | 15.2 | 2.0/2 | 7.4 | 8 s |
-| 1 | Idle | 20/20 | 92.2/85.9 | 8.1 | 9.0/11 | 0 | — |
-| 1 | Novice | 20/20 | 99.5/99.3 | 14.4 | 2.0/2 | 6.9 | 28 s |
-| 1 | Expert | 20/20 | 99.8/99.6 | 17.7 | 1.0/2 | 9.2 | 9 s |
-| 2 | Idle | 18/20 | 77.5/39.9 | 12.6 | 14.1/18 | 0 | — |
-| 2 | Novice | 20/20 | 99.1/98.5 | 19.0 | 3.1/4 | 10.4 | 30 s |
-| 2 | Expert | 20/20 | 99.7/99.5 | 20.3 | 1.2/2 | 11.6 | 9 s |
+| Practice | Idle | 20/20 | 97.9/94.2 | 2.3 | 2.3/3 | 0 | — |
+| Practice | Expert | 20/20 | 99.8/99.8 | 16.1 | 1.0/1 | 7.4 | 8 s |
+| Shift 1 | Idle | 20/20 | 91.6/91.6 | 5.0 | 5.0/5 | 0 | — |
+| Shift 1 | Novice | 20/20 | 99.6/99.4 | 12.6 | 2.0/2 | 6.2 | 25 s |
+| Shift 1 | Expert | 20/20 | 99.8/99.7 | 15.1 | 2.0/2 | 7.8 | 8 s |
+| Shift 2 | Idle | 20/20 | 92.2/85.9 | 8.1 | 9.0/11 | 0 | — |
+| Shift 2 | Novice | 20/20 | 99.5/99.3 | 14.2 | 2.0/2 | 6.4 | 28 s |
+| Shift 2 | Expert | 20/20 | 99.8/99.6 | 17.6 | 1.0/1 | 9.3 | 9 s |
+| Shift 3+ | Idle | 18/20 | 77.5/39.9 | 12.6 | 14.1/18 | 0 | — |
+| Shift 3+ | Novice | 20/20 | 99.1/97.8 | 18.9 | 3.0/5 | 10.0 | 31 s |
+| Shift 3+ | Expert | 20/20 | 99.7/99.6 | 20.4 | 1.2/2 | 11.9 | 8 s |
 
 Reading it: ignoring the network misses the target at every level and collapses
 some shift-3 runs; any engaged player stays well above it. Skill shows in score,

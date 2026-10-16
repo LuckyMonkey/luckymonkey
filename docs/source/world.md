@@ -4,7 +4,7 @@ title: Lucky Monkey source - world.rs
 
 # Source: game/src/world.rs
 
-**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 619 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 620 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -231,6 +231,7 @@ pub struct NodeData {
     pub position: Pos,
     #[serde(default)]
     pub connections: Vec<String>,
+    #[allow(dead_code)]
     pub status: Option<String>,
     #[serde(rename = "securityLevel")]
     pub security: Option<u8>,

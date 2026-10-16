@@ -100,6 +100,7 @@ pub struct NodeData {
     pub position: Pos,
     #[serde(default)]
     pub connections: Vec<String>,
+    #[allow(dead_code)]
     pub status: Option<String>,
     #[serde(rename = "securityLevel")]
     pub security: Option<u8>,

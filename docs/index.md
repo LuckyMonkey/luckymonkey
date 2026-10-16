@@ -19,13 +19,16 @@ real systems thinking:
   nodes on an isometric map.
 - Their **API connections** are vines with little data frames streaming along them.
 - The trouble that hits them is the trouble that hits real production systems:
-  [DDoS floods](failures.md#ddos_stampede),
-  [worms](failures.md#worm),
+  [DDoS floods](failures.md#ddos_flood),
+  [worms](failures.md#worm_infection),
   [replicas that disagree](failures.md#replica_disparity),
-  and [deploys that can be rolled back, and deploys that cannot](failures.md#bad_deployroll_back_or_fall_forward).
+  and [deploys that can be rolled back, and deploys that cannot](failures.md#bad_deploy).
 
-You walk the network, read the symptoms, pick the fix, and race the countdown.
-Some problems you can see coming and prevent. Others you can only react to.
+You run a crew (a monkey, a parrot, a sloth and a tree frog), read the symptoms,
+pick the fix, and race the big red **Time to Loss**. Some problems you can see
+coming and prevent. Others you can only react to. And before any of that, you can
+**tour the whole network** node by node, with its lore, or **practise** with no
+pressure.
 
 **▶ [Play it now](https://go.fridge.run/luckymonkey)**, or jump straight into a
 situation:
@@ -76,6 +79,8 @@ situation:
 | See what it looks like before reading anything | [A tour in pictures](tour.md) |
 | Know where it came from and how the pieces fit | [Overview and history](overview.md) |
 | Play well | [How to play](gameplay.md) and [Failure types](failures.md) |
+| Meet every node and its story | [Nodes and lore](nodes.md) |
+| Know why the on-call loop works the way it does | [On-call design](oncall-design.md) |
 | Understand the engine | [The engine: Bevy and ECS](engine.md), then [The world](world.md) |
 | Understand the game logic | [The network simulation](simulation.md) |
 | Change or extend it | [Extending](extending.md), [Build, deploy and test](build-deploy.md) |
@@ -92,7 +97,7 @@ situation:
 | Live | <https://go.fridge.run/luckymonkey> (public, no sign-in) |
 | Code | `LuckyMonkey/luckymonkey` on GitHub (private); browsable in the wiki: [source](source/index.md) |
 | Engine | Bevy 0.20 · Rust 2024 · wasm32 · WebGL2 ([details](engine.md)) |
-| Size | about 3,400 lines of Rust in 9 files; 28 nodes, 44 links, ~1,100 terrain cells |
+| Size | about 5,900 lines of Rust in 11 files; 28 nodes on 8 floating islands, 18 fault types, 20 actions, a crew of 4 |
 | Download | 6.7 MB compressed (the price of a full engine; [why](decisions.md)) |
 | Hosting | a container on fridge's shared Next.js runtime behind Caddy ([Architecture](:dev:architecture), [Runtimes](:dev:runtimes), [fridge-next-runtime](:git:next-runtime:start)) |
 | Built | on fridge, by [`tools/deploy.sh`](source/deploy-sh.md) ([Build, deploy and test](build-deploy.md)) |

@@ -4,9 +4,9 @@ title: Lucky Monkey source code
 
 # Source code
 
-The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: 398758c 2026-10-16). Back to the [documentation](../index.md).
+The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: ce1704f 2026-10-16). Back to the [documentation](../index.md).
 
-**Where to start reading:** [main.rs](main.md) (how the app is put together), then [ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and [fn clock](ops.md#fn_clock).
+**Where to start reading:** [main.rs](main.md) (how the app is put together), then [ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and the rules in [sim.rs](sim.md#impl_sim).
 
 ## The game (Rust, compiled to WebAssembly)
 
@@ -20,7 +20,9 @@ The whole game, readable in the wiki. Each Rust file has a heading for every fun
 | [game/src/clouds.rs](clouds.md) | Clouds drawn like the original divs; rain; storms that flash and send lightning strikes. | 8 functions, 19 items |
 | [game/src/view.rs](view.md) | The camera: pan, zoom, touch, picking nodes, following, deep-link zoom. | 11 functions, 21 items |
 | [game/src/ui.rs](ui.md) | Welcome screen, zoom buttons, hint bar, the node panel. | 19 functions, 38 items |
-| [game/src/ops.rs](ops.md) | The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD. | 52 functions, 114 items |
+| [game/src/sim.rs](sim.md) | The rules, with no Bevy: faults, responses, the incident director, crew, routing, health and SLA, scoring, the event log. Tested natively by game/simtest. | 7 functions, 40 items |
+| [game/src/data.rs](data.md) | Live JSON: fetches tuning/world/npcs from the page, deep-merges tuning over the built-in copy, falls back on errors. | 9 functions, 15 items |
+| [game/src/ops.rs](ops.md) | The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders. | 53 functions, 116 items |
 
 ## Around it: data, build, hosting
 
@@ -28,7 +30,9 @@ The whole game, readable in the wiki. Each Rust file has a heading for every fun
 |---|---|
 | [game/Cargo.toml](cargo-toml.md) | The Rust crate: Bevy features, dependencies, the size-optimised release profile. |
 | [tools/deploy.sh](deploy-sh.md) | Build on fridge and deploy. |
-| [tools/export-world.cjs](export-world.md) | Runs the TypeScript map generators and writes world.json / npcs.json. |
+| [tools/gen-world.py](gen-world.md) | Builds world.json from islands.json + nodes.json: the archipelago, the river, hills, islets, vines. |
+| [tools/gen-docs.py](gen-docs.md) | Writes the Failure types and Nodes and lore pages from the game data. |
+| [tools/export-world.cjs](export-world.md) | (Legacy) ran the TypeScript map generators; replaced by gen-world.py. |
 | [tools/make-textures.py](make-textures.md) | Packs the tile sprites into the atlas; draws the node card textures. |
 | [tools/subset-fonts.py](subset-fonts.md) | Re-subsets the embedded fonts to the characters in use. |
 | [tools/browser-test.sh](browser-test.md) | Plays the game in headless Firefox and saves screenshots. |

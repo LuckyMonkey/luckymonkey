@@ -26,12 +26,16 @@ RUST = [
     ("clouds.rs", "clouds", "Clouds drawn like the original divs; rain; storms that flash and send lightning strikes.", "world.md"),
     ("view.rs", "view", "The camera: pan, zoom, touch, picking nodes, following, deep-link zoom.", "interface.md"),
     ("ui.rs", "ui", "Welcome screen, zoom buttons, hint bar, the node panel.", "interface.md"),
-    ("ops.rs", "ops", "The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD.", "simulation.md"),
+    ("sim.rs", "sim", "The rules, with no Bevy: faults, responses, the incident director, crew, routing, health and SLA, scoring, the event log. Tested natively by game/simtest.", "simulation.md"),
+    ("data.rs", "data", "Live JSON: fetches tuning/world/npcs from the page, deep-merges tuning over the built-in copy, falls back on errors.", "build-deploy.md"),
+    ("ops.rs", "ops", "The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders.", "gameplay.md"),
 ]
 OTHER = [
     ("game/Cargo.toml", "cargo-toml", "toml", "The Rust crate: Bevy features, dependencies, the size-optimised release profile.", "build-deploy.md"),
     ("tools/deploy.sh", "deploy-sh", "bash", "Build on fridge and deploy.", "build-deploy.md"),
-    ("tools/export-world.cjs", "export-world", "javascript", "Runs the TypeScript map generators and writes world.json / npcs.json.", "world.md"),
+    ("tools/gen-world.py", "gen-world", "python", "Builds world.json from islands.json + nodes.json: the archipelago, the river, hills, islets, vines.", "world.md"),
+    ("tools/gen-docs.py", "gen-docs", "python", "Writes the Failure types and Nodes and lore pages from the game data.", "build-deploy.md"),
+    ("tools/export-world.cjs", "export-world", "javascript", "(Legacy) ran the TypeScript map generators; replaced by gen-world.py.", "world.md"),
     ("tools/make-textures.py", "make-textures", "python", "Packs the tile sprites into the atlas; draws the node card textures.", "world.md"),
     ("tools/subset-fonts.py", "subset-fonts", "python", "Re-subsets the embedded fonts to the characters in use.", "extending.md"),
     ("tools/browser-test.sh", "browser-test", "bash", "Plays the game in headless Firefox and saves screenshots.", "build-deploy.md"),
@@ -216,7 +220,7 @@ def main():
         "Back to the [documentation](../index.md).", "",
         "**Where to start reading:** [main.rs](main.md) (how the app is put together), then "
         "[ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and "
-        "[fn clock](ops.md#fn_clock).", "",
+        "the rules in [sim.rs](sim.md#impl_sim).", "",
         "## The game (Rust, compiled to WebAssembly)", "",
         "| File | What it does | Size |", "|---|---|---|",
     ] + rows + [

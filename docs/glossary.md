@@ -10,16 +10,20 @@ Terms used across these pages, each with where to read more.
 
 | Term | Meaning | More |
 |---|---|---|
-| **Shift** | One game: 09:00 to 17:00, 8 real minutes | [How to play](gameplay.md#the_goal) |
-| **SLA** | The uptime score you must keep above 0. In real life, a [service level agreement](https://en.wikipedia.org/wiki/Service-level_agreement) | [SLA drain](gameplay.md#the_sla_drains_while_things_are_broken) |
-| **Incident** 🚨 | Something broken now, with a countdown | [Incidents](gameplay.md#incidents_reactive) |
-| **Forecast** 🔮 | Something that will break unless prevented; needs the Watchtower | [Forecasts](gameplay.md#forecasts_proactive) |
-| **TTL** | "Time to live": seconds left on an alert's countdown | [`struct Alert`](source/ops.md#struct_alert) |
-| **Unstable / down** | A node with an open incident / one whose countdown ran out | [`enum Health`](source/ops.md#enum_health) |
-| **The monkey** 🐒 | You: the only one who can fix things, and only where it stands | [You are the monkey](gameplay.md#you_are_the_monkey) |
-| **Hiking** | Walking cross-country when no link route exists (slow) | [Routing](simulation.md#routinghow_the_monkey_finds_its_way) |
-| **Watchtower** 🔭 | The monitoring node; forecasts need it up | [Tour](tour.md#the_canopy_watchtower) |
-| **Data frames** | The little boxes streaming along links and rivers | [Visual feedback](simulation.md#visual_feedback_driven_by_the_model) |
+| **Shift** | One game: 09:00 to 17:00, 8 real minutes | [How to play](gameplay.md#the_shift) |
+| **Network health** | Right now: online 1, degraded 0.5, unreachable 0.3, down 0, weighted by criticality | [The shift](gameplay.md#the_shift) |
+| **Shift SLA** | The average network health over the shift; target 95%. In real life, a [service level agreement](https://en.wikipedia.org/wiki/Service-level_agreement) | [The shift](gameplay.md#the_shift) |
+| **Time to Loss** ⏳ | The game's own countdown to the next consequence. **Not** IP TTL (a hop count) and **not** DNS TTL (how long a record may be cached) | [Trouble](gameplay.md#trouble) |
+| **Warning** | Trouble you can see coming and prevent; nothing broken yet | [Trouble](gameplay.md#trouble) |
+| **Incident** 🚨 | A node degraded by a fault, counting down to down | [Trouble](gameplay.md#trouble) |
+| **Root cause / impact** | The fault itself vs what it does to others (unreachable nodes have no fault of their own) | [Simulation](simulation.md#healthroot_causes_vs_impacts) |
+| **Fix / mitigate** | Remove the cause vs buy time | [Responding](gameplay.md#responding) |
+| **Diagnose** 🔍 | Inspect first: shows what each option would do | [Responding](gameplay.md#responding) |
+| **Director** | Decides when new trouble arrives, and holds back when you're swamped | [The director](gameplay.md#the_directorwhy_it_never_piles_on_unfairly) |
+| **Crew** | Mango 🐵, Pip 🦜, Moss 🦥, Fern 🐸 | [Your crew](gameplay.md#your_crew) |
+| **Tour / Practice** | Learn the network with nothing breaking / one problem at a time | [Learn first](gameplay.md#learn_the_network_before_you_play) |
+| **Edge pins** | Off-screen nodes shown as their icon on the screen edge | [All the keys](gameplay.md#all_the_keys) |
+| **Data frames** | The little boxes streaming along links and the river | [The world](world.md#water_effects) |
 | **Deep link** | A URL `#hash` that opens the game at a node, with trouble staged | [Deep links](interface.md#deep_links) |
 
 ## Operations terms (the real-world side)
@@ -27,13 +31,13 @@ Terms used across these pages, each with where to read more.
 | Term | Meaning | More |
 |---|---|---|
 | **On call** | Being the person who responds when systems break | [SRE: Incidents and operability](https://go.fridge.run/certs/learn/sre?n=5) |
-| **DDoS** | A flood of requests from many sources, meant to overwhelm a service | [Wikipedia](https://en.wikipedia.org/wiki/Denial-of-service_attack) · [in the game](failures.md#ddos_stampede) |
+| **DDoS** | A flood of requests from many sources, meant to overwhelm a service | [Wikipedia](https://en.wikipedia.org/wiki/Denial-of-service_attack) · [in the game](failures.md#ddos_flood) |
 | **Rate limiting** | Capping how many requests a client may make | [Wikipedia](https://en.wikipedia.org/wiki/Rate_limiting) · [Matt's guide: usage plans](https://go.fridge.run/certs/learn/matt?n=4) |
-| **Worm** | Malware that copies itself across a network on its own | [Wikipedia](https://en.wikipedia.org/wiki/Computer_worm) · [in the game](failures.md#worm) |
+| **Worm** | Malware that copies itself across a network on its own | [Wikipedia](https://en.wikipedia.org/wiki/Computer_worm) · [in the game](failures.md#worm_infection) |
 | **Quarantine** | Isolating a host so a problem cannot spread | [Security+: Incident response](https://go.fridge.run/certs/learn/secplus?n=4) |
 | **Replica / split-brain** | Copies of data; split-brain is when copies diverge | [Wikipedia](https://en.wikipedia.org/wiki/Split-brain_(computing)) · [in the game](failures.md#replica_disparity) |
-| **Rollback** | Returning to the previous version | [in the game](failures.md#bad_deployroll_back_or_fall_forward) |
-| **Fall forward / roll forward** | Fixing a bad release with a new one, because going back is impossible (e.g. after a schema migration) | [in the game](failures.md#bad_deployroll_back_or_fall_forward) |
+| **Rollback** | Returning to the previous version | [in the game](failures.md#bad_deploy) |
+| **Fall forward / roll forward** | Fixing a bad release with a new one, because going back is impossible (e.g. after a schema migration) | [in the game](failures.md#bad_deploy) |
 | **Schema migration** | A change to the shape of stored data; often one-way | [Data & Databases course](https://go.fridge.run/certs/t/data) |
 | **Canary release** | Sending a new version to a small slice of traffic first | [Martin Fowler](https://martinfowler.com/bliki/CanaryRelease.html) |
 | **Failover** | Switching to standby capacity when the primary fails | [Wikipedia](https://en.wikipedia.org/wiki/Failover) |
