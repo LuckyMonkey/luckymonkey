@@ -4,7 +4,7 @@ Isometric jungle-network game, live at **https://go.fridge.run/luckymonkey**
 (fridge.run/luckymonkey forwards there). It runs on **fridge**.
 
 The game is a [Bevy](https://bevyengine.org) 0.20 app (Rust → WebAssembly) in
-`game/`. Next.js 14 on the shared [fridge-next runtime](../fridge-next-runtime)
+`game/`. Next.js 14 on the shared [fridge-next runtime](:git:next-runtime:start)
 only serves the page that hosts its canvas (`app/page.tsx`) and the built
 `public/game/` files. Pixi.js (v0.2) is in git history.
 
