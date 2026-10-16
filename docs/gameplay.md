@@ -126,7 +126,7 @@ acted, and a combo for consecutive right calls. The end screen shows:
 - a title: **SHIFT COMPLETE · SLA met**, **SHIFT OVER · SLA target missed**, or **GAME OVER · major outage**;
 - the score broken down;
 - ✅ **what went right** and ⚠ **what went wrong**, as specific events, e.g.
-  "Main Router went down when its Time to Loss ran out, cutting off 27 other services";
+  "メインルーター Router went down when its Time to Loss ran out, cutting off 27 other service(s)";
 - a tip;
 - 🏆 your last 20 shifts in this browser.
 
