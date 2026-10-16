@@ -83,23 +83,13 @@ def main():
     def ground(c):
         return tiles[c]["height"] if c in tiles else None
 
-    # Vine bridges: one per pair of islands that share an API link.
-    pairs = set()
-    for n in nodes_src:
-        for c in n.get("connections", []):
-            if c in island_of and island_of[c] != island_of[n["id"]]:
-                pairs.add(tuple(sorted((n["id"], c))))
+    # Vine bridges: only the island pairs listed in `bridges`.
+    centre_of = {i["id"]: tuple(i["center"]) for i in lay["islands"]}
     bridged = set()
-    for a, b in sorted(pairs):
-        key = tuple(sorted((island_of[a], island_of[b])))
-        if key in bridged:
-            continue
-        bridged.add(key)
-        cells = line(where[a], where[b])
-        void = [c for c in cells if c not in tiles]
-        if not void:
-            continue
-        ha, hb = ground(where[a]) or 0, ground(where[b]) or 0
+    for a, b in lay.get("bridges", []):
+        bridged.add((a, b))
+        cells = line(centre_of[a], centre_of[b])
+        ha, hb = ground(centre_of[a]) or 0, ground(centre_of[b]) or 0
         for k, c in enumerate(cells):
             if c in tiles:
                 continue
@@ -122,7 +112,7 @@ def main():
         prev_h = None
         for i, (x, y, h) in enumerate(centre):
             nxt = centre[i + 1][2] if i + 1 < len(centre) else h
-            fall = i == 0 or nxt < h or (prev_h is not None and prev_h > h and i < 2)
+            fall = i < 2 or i >= len(centre) - 2 or nxt < h
             for dx, dy in ((0, 0), (1, 0), (0, 1)):
                     c = (x + dx, y + dy)
                     old = tiles.get(c)
@@ -153,6 +143,15 @@ def main():
                         decos.append(dict(type="lotus", position=dict(x=c[0], y=c[1], height=h)))
                 elif math.hypot(dx, dy) <= r + 1.2 and c not in tiles:
                     put(*c, GRASS, h)
+
+    # Nodes that landed in the river or the void step onto the nearest bank (water nodes may stay).
+    for nid, (x, y) in list(where.items()):
+        t = tiles.get((x, y))
+        if t and (t["type"] != WATER or by_id[nid].get("type") in ("river", "lake", "balancer")):
+            continue
+        land = [c for c, t in tiles.items() if t["type"] != WATER and owner.get(c) == island_of[nid] and c not in where.values()]
+        if land:
+            where[nid] = min(land, key=lambda c: (c[0] - x) ** 2 + (c[1] - y) ** 2)
 
     # Islets: small floating rocks scattered in the gaps, for scale and depth.
     xs = [c[0] for c in tiles]; ys = [c[1] for c in tiles]

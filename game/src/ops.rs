@@ -349,12 +349,9 @@ pub struct PanelTtl(pub usize);
 
 #[derive(Resource, Default)]
 struct AlertListVersion(Option<u32>);
-#[derive(Resource, Default)]
-struct IslandBarVersion(Option<u32>);
+/// A node's stand-in pinned to the screen edge while the node is off screen.
 #[derive(Component)]
-struct IslandBar;
-#[derive(Component)]
-struct IslandChip(usize);
+struct EdgePin(usize);
 #[derive(Component)]
 struct NextText;
 /// "Swing here" button in the node panel.
@@ -364,14 +361,14 @@ pub struct SwingButton;
 pub fn plugin(app: &mut App) {
     app.init_resource::<Shift>()
         .init_resource::<AlertListVersion>()
-        .init_resource::<IslandBarVersion>()
         .add_systems(Startup, setup_net)
         .add_systems(PostStartup, spawn_overlay)
-        .add_systems(OnEnter(Screen::Playing), (spawn_hud, apply_link).chain())
+        .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
+        .add_systems(Update, (pins, pin_clicks).run_if(in_state(Screen::Playing)))
         .add_systems(Update, (links, frames, cards, popups, monkey_token))
         .add_systems(
             Update,
-            (navigate, controls, walk, work, clock, strikes, hud, alert_list, island_bar, live_ttls).chain().run_if(in_state(Screen::Playing)),
+            (navigate, controls, walk, work, clock, strikes, hud, alert_list, live_ttls).chain().run_if(in_state(Screen::Playing)),
         );
 }
 
@@ -781,14 +778,13 @@ fn island_entry(world: &World, island: usize) -> Option<usize> {
 
 /// Jumping the selection around: arrows hop to the nearest node in that
 /// direction (links preferred), Q/E step between islands, Tab cycles alerts,
-/// island chips fly to an island. Works in and out of a shift.
+/// edge pins fly to their node. Works in and out of a shift.
 fn navigate(
     keys: Res<ButtonInput<KeyCode>>,
     world: Res<World>,
     net: Res<Net>,
     monkey: Res<Monkey>,
     mut view: ResMut<ViewState>,
-    chips: Query<(&Interaction, &IslandChip), Changed<Interaction>>,
 ) {
     let from = view.selected.unwrap_or(monkey.at);
     let mut pick = None;
@@ -822,11 +818,6 @@ fn navigate(
         if let Some(step) = step {
             pick = island_entry(&world, (here + step) % islands);
         }
-        for (i, chip) in &chips {
-            if *i == Interaction::Pressed {
-                pick = island_entry(&world, chip.0);
-            }
-        }
     }
     if keys.just_pressed(KeyCode::Tab) {
         let sighted = net.sighted();
@@ -840,6 +831,84 @@ fn navigate(
     if let Some(j) = pick {
         view.selected = Some(j);
         view.focus = Some(net.at[j]);
+    }
+}
+
+const PIN: f32 = 38.0;
+const PIN_MARGIN: f32 = 10.0;
+
+fn spawn_pins(mut commands: Commands, art: Res<Art>, world: Res<World>) {
+    for (i, node) in world.nodes.iter().enumerate() {
+        commands.spawn((
+            EdgePin(i),
+            Blocks,
+            Interaction::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(PIN),
+                height: px(PIN),
+                display: Display::None,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border: UiRect::all(px(2)),
+                border_radius: BorderRadius::all(px(8)),
+                ..default()
+            },
+            BorderColor::all(GREEN_400),
+            BackgroundColor(node_color(&node.kind).with_alpha(0.92)),
+            GlobalZIndex(30),
+            children![(Text::new(node.emoji.clone()), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(20.0), ..default() })],
+        ));
+    }
+}
+
+/// Nodes out of view turn into their icon, stuck to the screen edge in the
+/// direction they lie; back in view, the pin hides and the card is the node again.
+fn pins(
+    time: Res<Time>,
+    net: Res<Net>,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    mut q: Query<(&EdgePin, &mut Node, &mut BorderColor)>,
+) {
+    let (cam, cam_tf) = *camera;
+    let size = window.size();
+    // Pins live inside the screen minus a margin; the bottom keeps clear of the controls hint.
+    let (lo, hi) = (Vec2::splat(PIN_MARGIN + PIN / 2.0), size - Vec2::new(PIN_MARGIN + PIN / 2.0, 40.0 + PIN / 2.0));
+    let centre = (lo + hi) / 2.0;
+    let half = (hi - lo) / 2.0;
+    let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 6.0).sin();
+    for (pin, mut node, mut border) in &mut q {
+        let Ok(p) = cam.world_to_viewport(cam_tf, net.at[pin.0].extend(0.0)) else { continue };
+        // The card is 80 world px; count it as visible while any of it is on screen.
+        let inside = p.x > -20.0 && p.y > -20.0 && p.x < size.x + 20.0 && p.y < size.y + 20.0;
+        if inside {
+            node.display = Display::None;
+            continue;
+        }
+        let d = p - centre;
+        let t = (half.x / d.x.abs().max(1e-3)).min(half.y / d.y.abs().max(1e-3));
+        let at = centre + d * t - Vec2::splat(PIN / 2.0);
+        node.display = Display::Flex;
+        node.left = px(at.x);
+        node.top = px(at.y);
+        let base = match (net.alerts[pin.0], net.health[pin.0]) {
+            (_, Health::Down) => RED,
+            (Some(a), _) if !a.forecast => RED_400,
+            (Some(_), _) if net.sighted() => AMBER,
+            _ => GREEN_400,
+        };
+        let c = if base == GREEN_400 { base.with_alpha(0.7) } else { base.with_alpha(0.4 + 0.6 * pulse) };
+        *border = BorderColor::all(c);
+    }
+}
+
+fn pin_clicks(net: Res<Net>, mut view: ResMut<ViewState>, q: Query<(&Interaction, &EdgePin), Changed<Interaction>>) {
+    for (i, pin) in &q {
+        if *i == Interaction::Pressed {
+            view.selected = Some(pin.0);
+            view.focus = Some(net.at[pin.0]);
+        }
     }
 }
 
@@ -1220,20 +1289,6 @@ fn apply_link(
 
 fn spawn_hud(mut commands: Commands, art: Res<Art>) {
     commands.spawn((
-        IslandBar,
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: px(40),
-            left: px(8),
-            right: px(8),
-            flex_wrap: FlexWrap::Wrap,
-            column_gap: px(6),
-            row_gap: px(4),
-            ..default()
-        },
-        GlobalZIndex(40),
-    ));
-    commands.spawn((
         Node {
             position_type: PositionType::Absolute,
             top: px(16),
@@ -1388,45 +1443,6 @@ fn next_step(shift: &Shift, net: &Net, monkey: &Monkey, view: &ViewState) -> Str
         }
         None => "▶ All quiet: patrol with the arrows, Q/E between islands, G to go".into(),
     }
-}
-
-/// One chip per island with its open incidents; click flies there.
-fn island_bar(
-    mut commands: Commands,
-    art: Res<Art>,
-    world: Res<World>,
-    net: Res<Net>,
-    mut seen: ResMut<IslandBarVersion>,
-    bar: Single<(Entity, Option<&Children>), With<IslandBar>>,
-) {
-    if seen.0 == Some(net.version) {
-        return;
-    }
-    seen.0 = Some(net.version);
-    let (root, children) = *bar;
-    if let Some(children) = children {
-        for c in children.iter() {
-            commands.entity(c).despawn();
-        }
-    }
-    commands.entity(root).with_children(|bar| {
-        for (k, isl) in world.islands.iter().enumerate() {
-            let members: Vec<usize> = (0..world.nodes.len()).filter(|&i| world.nodes[i].island == isl.id).collect();
-            let hurt = members.iter().filter(|&&i| net.alerts[i].is_some_and(|a| !a.forecast)).count();
-            let down = members.iter().any(|&i| net.health[i] == Health::Down);
-            let color = if down { RED_400 } else if hurt > 0 { AMBER } else { GREEN_300 };
-            let badge = if hurt > 0 { format!(" 🚨{hurt}") } else { String::new() };
-            bar.spawn((
-                IslandChip(k),
-                Blocks,
-                Interaction::default(),
-                Node { padding: UiRect::axes(px(8), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
-                BorderColor::all(color.with_alpha(0.6)),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.93)),
-                children![(Text::new(format!("{} {}{badge}", isl.emoji, isl.name)), art.text(true, 11.0), TextColor(color))],
-            ));
-        }
-    });
 }
 
 /// Open alerts, most urgent first, clickable. Rebuilt when the network changes.

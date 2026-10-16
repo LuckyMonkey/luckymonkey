@@ -39,8 +39,6 @@ struct Cloud {
 #[derive(Component)]
 struct Fill;
 #[derive(Component)]
-struct Glow;
-#[derive(Component)]
 struct Bolt;
 #[derive(Component)]
 struct Drop {
@@ -74,7 +72,6 @@ fn border(w: Weather) -> Color {
     }
 }
 
-const GLOW: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
 
 fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>, mut rng: ResMut<Rng>) {
     let b = world.bounds;
@@ -99,7 +96,6 @@ fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>, mut rng: ResM
                 Visibility::Inherited,
             ))
             .with_children(|c| {
-                c.spawn((Glow, Sprite { image: art.dot.clone(), color: GLOW, custom_size: Some(size + Vec2::splat(40.0)), ..default() }, Transform::from_xyz(0.0, 0.0, -0.02)));
                 c.spawn((Fill, Sprite { image: art.pill.clone(), color: fill(weather), custom_size: Some(size), ..default() }, Transform::from_xyz(0.0, 0.0, -0.01)));
                 c.spawn((Sprite { image: art.pill_border.clone(), color: border(weather), custom_size: Some(size), ..default() }, Transform::default()));
                 c.spawn((emoji_text(&art, glyph, emoji_px), TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)), Transform::from_xyz(0.0, 0.0, 0.01).with_scale(Vec3::splat(0.5))));
@@ -156,8 +152,7 @@ fn storm(
     mut rng: ResMut<Rng>,
     mut strikes: MessageWriter<Strike>,
     mut clouds: Query<(&mut Cloud, &Transform, &Children)>,
-    mut fills: Query<&mut Sprite, (With<Fill>, Without<Glow>)>,
-    mut glows: Query<&mut Sprite, (With<Glow>, Without<Fill>)>,
+    mut fills: Query<&mut Sprite, With<Fill>>,
     mut bolts: Query<&mut TextColor, With<Bolt>>,
 ) {
     let dt = time.delta_secs();
@@ -170,7 +165,7 @@ fn storm(
             cloud.flash = Some(0.0);
             cloud.next_flash = 4.0 + rng.f32() * 5.0;
         }
-        // Ramp up, hold, ramp down: the pill itself lights up yellow and glows.
+        // Ramp up, hold, ramp down: the pill itself lights up yellow.
         let lit = match cloud.flash {
             Some(before) => {
                 let f = before + dt;
@@ -186,9 +181,6 @@ fn storm(
         for c in children.iter() {
             if let Ok(mut s) = fills.get_mut(c) {
                 s.color = Color::Srgba(gray.mix(&Srgba::new(0.992, 0.878, 0.278, 0.5), lit));
-            }
-            if let Ok(mut s) = glows.get_mut(c) {
-                s.color = Color::Srgba(GLOW.to_srgba().mix(&Srgba::new(0.98, 0.8, 0.08, 0.7), lit));
             }
             if let Ok(mut b) = bolts.get_mut(c) {
                 b.0 = b.0.with_alpha(lit);

@@ -4,7 +4,7 @@ title: Lucky Monkey source - clouds.rs
 
 # Source: game/src/clouds.rs
 
-**Clouds drawn like the original divs; rain; storms that flash and send lightning strikes.** Explained in [world](../world.md). 198 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/clouds.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**Clouds drawn like the original divs; rain; storms that flash and send lightning strikes.** Explained in [world](../world.md). 190 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/clouds.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -27,14 +27,12 @@ blending of the HUD, and as sprites they pan and zoom with the map for free.
 | [struct Strike](#struct_strike) | Lightning hit the ground at this world position. |
 | [struct Cloud](#struct_cloud) |  |
 | [struct Fill](#struct_fill) | Parts of a cloud that change during a flash. |
-| [struct Glow](#struct_glow) |  |
 | [struct Bolt](#struct_bolt) |  |
 | [struct Drop](#struct_drop) |  |
 | [fn plugin](#fn_plugin) |  |
 | [fn wind](#fn_wind) | Wind direction (Bevy coordinates): left to right, sinking slightly. |
 | [fn fill](#fn_fill) |  |
 | [fn border](#fn_border) |  |
-| [const GLOW](#const_glow) |  |
 | [fn spawn](#fn_spawn) |  |
 | [fn drift](#fn_drift) |  |
 | [fn rain](#fn_rain) |  |
@@ -110,13 +108,6 @@ Parts of a cloud that change during a flash.
 struct Fill;
 ```
 
-### struct Glow
-
-```rust
-#[derive(Component)]
-struct Glow;
-```
-
 ### struct Bolt
 
 ```rust
@@ -177,12 +168,6 @@ fn border(w: Weather) -> Color {
 }
 ```
 
-### const GLOW
-
-```rust
-const GLOW: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
-```
-
 ### fn spawn
 
 ```rust
@@ -209,7 +194,6 @@ fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>, mut rng: ResM
                 Visibility::Inherited,
             ))
             .with_children(|c| {
-                c.spawn((Glow, Sprite { image: art.dot.clone(), color: GLOW, custom_size: Some(size + Vec2::splat(40.0)), ..default() }, Transform::from_xyz(0.0, 0.0, -0.02)));
                 c.spawn((Fill, Sprite { image: art.pill.clone(), color: fill(weather), custom_size: Some(size), ..default() }, Transform::from_xyz(0.0, 0.0, -0.01)));
                 c.spawn((Sprite { image: art.pill_border.clone(), color: border(weather), custom_size: Some(size), ..default() }, Transform::default()));
                 c.spawn((emoji_text(&art, glyph, emoji_px), TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)), Transform::from_xyz(0.0, 0.0, 0.01).with_scale(Vec3::splat(0.5))));
@@ -278,8 +262,7 @@ fn storm(
     mut rng: ResMut<Rng>,
     mut strikes: MessageWriter<Strike>,
     mut clouds: Query<(&mut Cloud, &Transform, &Children)>,
-    mut fills: Query<&mut Sprite, (With<Fill>, Without<Glow>)>,
-    mut glows: Query<&mut Sprite, (With<Glow>, Without<Fill>)>,
+    mut fills: Query<&mut Sprite, With<Fill>>,
     mut bolts: Query<&mut TextColor, With<Bolt>>,
 ) {
     let dt = time.delta_secs();
@@ -292,7 +275,7 @@ fn storm(
             cloud.flash = Some(0.0);
             cloud.next_flash = 4.0 + rng.f32() * 5.0;
         }
-        // Ramp up, hold, ramp down: the pill itself lights up yellow and glows.
+        // Ramp up, hold, ramp down: the pill itself lights up yellow.
         let lit = match cloud.flash {
             Some(before) => {
                 let f = before + dt;
@@ -308,9 +291,6 @@ fn storm(
         for c in children.iter() {
             if let Ok(mut s) = fills.get_mut(c) {
                 s.color = Color::Srgba(gray.mix(&Srgba::new(0.992, 0.878, 0.278, 0.5), lit));
-            }
-            if let Ok(mut s) = glows.get_mut(c) {
-                s.color = Color::Srgba(GLOW.to_srgba().mix(&Srgba::new(0.98, 0.8, 0.08, 0.7), lit));
             }
             if let Ok(mut b) = bolts.get_mut(c) {
                 b.0 = b.0.with_alpha(lit);
