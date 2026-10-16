@@ -245,6 +245,10 @@ pub struct Shift {
     prevented: u32,
     next_incident: f32,
     next_forecast: f32,
+    /// Spent on vine swings (J): straight to any node, fast, over anything.
+    bananas: u32,
+    /// Right fixes in a row; multiplies points.
+    combo: u32,
     log: VecDeque<(String, f32)>,
 }
 
@@ -279,6 +283,9 @@ pub struct Monkey {
     /// Pending or running work.
     job: Option<Job>,
     pos: Vec2,
+    /// The current leg is a vine swing (fast, straight, from `origin`).
+    swing: bool,
+    origin: Option<Vec2>,
 }
 
 #[derive(Clone, Copy)]
@@ -342,17 +349,29 @@ pub struct PanelTtl(pub usize);
 
 #[derive(Resource, Default)]
 struct AlertListVersion(Option<u32>);
+#[derive(Resource, Default)]
+struct IslandBarVersion(Option<u32>);
+#[derive(Component)]
+struct IslandBar;
+#[derive(Component)]
+struct IslandChip(usize);
+#[derive(Component)]
+struct NextText;
+/// "Swing here" button in the node panel.
+#[derive(Component)]
+pub struct SwingButton;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Shift>()
         .init_resource::<AlertListVersion>()
+        .init_resource::<IslandBarVersion>()
         .add_systems(Startup, setup_net)
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, apply_link).chain())
         .add_systems(Update, (links, frames, cards, popups, monkey_token))
         .add_systems(
             Update,
-            (controls, walk, work, clock, strikes, hud, alert_list, live_ttls).chain().run_if(in_state(Screen::Playing)),
+            (navigate, controls, walk, work, clock, strikes, hud, alert_list, island_bar, live_ttls).chain().run_if(in_state(Screen::Playing)),
         );
 }
 
@@ -391,7 +410,7 @@ fn setup_net(mut commands: Commands, world: Res<World>) {
         })
         .collect();
     let home = world.nodes.iter().position(|n| n.kind == "monkey").unwrap_or(0);
-    commands.insert_resource(Monkey { at: home, path: VecDeque::new(), leg: 0.0, leg_len: 1.0, overland: false, job: None, pos: at[home] });
+    commands.insert_resource(Monkey { at: home, path: VecDeque::new(), leg: 0.0, leg_len: 1.0, overland: false, job: None, pos: at[home], swing: false, origin: None });
     commands.insert_resource(Net {
         health: world.nodes.iter().map(|n| data_health(n.status.as_deref())).collect(),
         alerts: vec![None; n],
@@ -560,7 +579,15 @@ fn monkey_token(
 ) {
     let t = time.elapsed_secs();
     let walking = !monkey.path.is_empty();
-    let hop = if walking { (t * 12.0).sin().abs() * 6.0 } else { 0.0 };
+    // Every leg is a leap: an arc scaled to its length (higher on a vine swing).
+    let hop = if !walking {
+        0.0
+    } else if monkey.overland {
+        (t * 12.0).sin().abs() * 6.0
+    } else {
+        let peak = (monkey.leg_len * 0.22).clamp(18.0, if monkey.swing { 240.0 } else { 90.0 });
+        (std::f32::consts::PI * monkey.leg).sin() * peak
+    };
     // Stand beside the card, not on it.
     token.translation = (monkey.pos + Vec2::new(34.0, 30.0 + hop)).extend(NODE_Z + 30.0);
     let (bar_tf, vis) = &mut *bar;
@@ -635,14 +662,16 @@ fn forecast(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
 }
 
 fn start(shift: &mut Shift, net: &mut Net, monkey: &mut Monkey) {
-    *shift = Shift { phase: Phase::Running, sla: tuning().start_sla, next_incident: tuning().first_incident, next_forecast: tuning().first_forecast, ..default() };
+    *shift = Shift { phase: Phase::Running, sla: tuning().start_sla, bananas: tuning().bananas_start, next_incident: tuning().first_incident, next_forecast: tuning().first_forecast, ..default() };
     net.health.iter_mut().for_each(|h| *h = Health::Online);
     net.alerts.iter_mut().for_each(|a| *a = None);
     net.queued = None;
     net.touch();
     monkey.path.clear();
     monkey.job = None;
-    shift.say("09:00, shift started. Click a node and pick a fix: the monkey walks there and does it.");
+    monkey.swing = false;
+    monkey.origin = None;
+    shift.say("09:00, shift started. Space jumps to the worst alert, 1-4 picks a fix: the monkey hops there and does it.");
 }
 
 /// Shortest walk from `from` to `to` over the links. Down nodes can't be
@@ -687,7 +716,8 @@ fn eta(net: &Net, monkey: &Monkey, to: usize) -> f32 {
         return if monkey.at == to { 0.0 } else { net.at[monkey.at].distance(net.at[to]) / tuning().link_speed };
     };
     let speed = |overland: bool| if overland { tuning().hike_speed } else { tuning().link_speed };
-    let mut t = (1.0 - monkey.leg) * monkey.leg_len / speed(monkey.overland);
+    let first = if monkey.swing { tuning().swing_speed } else { speed(monkey.overland) };
+    let mut t = (1.0 - monkey.leg) * monkey.leg_len / first;
     let mut prev = next;
     for &p in monkey.path.iter().skip(1) {
         t += net.at[prev].distance(net.at[p]) / speed(!net.neighbours[prev].contains(&p));
@@ -715,12 +745,101 @@ impl Monkey {
             self.begin_leg(net);
         }
     }
+    /// Swing on a vine straight to `to`, from wherever the monkey is now.
+    fn swing_to(&mut self, net: &Net, to: usize) {
+        self.path.clear();
+        self.path.push_back(to);
+        self.origin = Some(self.pos);
+        self.leg = 0.0;
+        self.leg_len = self.pos.distance(net.at[to]).max(1.0);
+        self.overland = false;
+        self.swing = true;
+    }
     fn begin_leg(&mut self, net: &Net) {
         self.leg = 0.0;
+        self.swing = false;
+        self.origin = None;
         if let Some(&next) = self.path.front() {
             self.leg_len = net.at[self.at].distance(net.at[next]).max(1.0);
             self.overland = !net.neighbours[self.at].contains(&next);
         }
+    }
+}
+
+/// Screen direction of an arrow key.
+const ARROWS: [(KeyCode, Vec2); 4] =
+    [(KeyCode::ArrowUp, Vec2::Y), (KeyCode::ArrowDown, Vec2::NEG_Y), (KeyCode::ArrowLeft, Vec2::NEG_X), (KeyCode::ArrowRight, Vec2::X)];
+
+fn island_of(world: &World, node: usize) -> Option<usize> {
+    world.islands.iter().position(|i| i.id == world.nodes[node].island)
+}
+
+fn island_entry(world: &World, island: usize) -> Option<usize> {
+    let id = world.islands[island].nodes.first()?;
+    world.nodes.iter().position(|n| &n.id == id)
+}
+
+/// Jumping the selection around: arrows hop to the nearest node in that
+/// direction (links preferred), Q/E step between islands, Tab cycles alerts,
+/// island chips fly to an island. Works in and out of a shift.
+fn navigate(
+    keys: Res<ButtonInput<KeyCode>>,
+    world: Res<World>,
+    net: Res<Net>,
+    monkey: Res<Monkey>,
+    mut view: ResMut<ViewState>,
+    chips: Query<(&Interaction, &IslandChip), Changed<Interaction>>,
+) {
+    let from = view.selected.unwrap_or(monkey.at);
+    let mut pick = None;
+    for (k, dir) in ARROWS {
+        if !keys.just_pressed(k) {
+            continue;
+        }
+        pick = (0..net.at.len())
+            .filter(|&j| j != from)
+            .filter_map(|j| {
+                let v = net.at[j] - net.at[from];
+                let cos = v.normalize_or_zero().dot(dir);
+                (cos > 0.45).then(|| {
+                    let linked = if net.neighbours[from].contains(&j) { 0.6 } else { 1.0 };
+                    (j, v.length() * (2.0 - cos) * linked)
+                })
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(j, _)| j);
+    }
+    let islands = world.islands.len();
+    if islands > 0 {
+        let here = island_of(&world, from).unwrap_or(0);
+        let step = if keys.just_pressed(KeyCode::KeyE) {
+            Some(1)
+        } else if keys.just_pressed(KeyCode::KeyQ) {
+            Some(islands - 1)
+        } else {
+            None
+        };
+        if let Some(step) = step {
+            pick = island_entry(&world, (here + step) % islands);
+        }
+        for (i, chip) in &chips {
+            if *i == Interaction::Pressed {
+                pick = island_entry(&world, chip.0);
+            }
+        }
+    }
+    if keys.just_pressed(KeyCode::Tab) {
+        let sighted = net.sighted();
+        let mut open: Vec<(usize, Alert)> = net.alerts.iter().enumerate().filter_map(|(i, a)| a.filter(|a| !a.forecast || sighted).map(|a| (i, a))).collect();
+        open.sort_by(|a, b| a.1.forecast.cmp(&b.1.forecast).then(a.1.ttl.total_cmp(&b.1.ttl)));
+        if !open.is_empty() {
+            let next = view.selected.and_then(|s| open.iter().position(|(i, _)| *i == s)).map_or(0, |p| (p + 1) % open.len());
+            pick = Some(open[next].0);
+        }
+    }
+    if let Some(j) = pick {
+        view.selected = Some(j);
+        view.focus = Some(net.at[j]);
     }
 }
 
@@ -731,6 +850,7 @@ fn controls(
     mut monkey: ResMut<Monkey>,
     mut view: ResMut<ViewState>,
     start_button: Query<&Interaction, (With<StartButton>, Changed<Interaction>)>,
+    swing_button: Query<&Interaction, (With<SwingButton>, Changed<Interaction>)>,
     go_button: Query<&Interaction, (With<GoButton>, Changed<Interaction>)>,
     action_buttons: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
     rows: Query<(&Interaction, &AlertRow), Changed<Interaction>>,
@@ -766,7 +886,25 @@ fn controls(
         view.focus = Some(monkey.pos);
     }
     let Some(node) = view.selected else { return };
-    if keys.just_pressed(KeyCode::KeyG) || go_button.iter().any(|i| *i == Interaction::Pressed) {
+    if keys.just_pressed(KeyCode::KeyJ) || swing_button.iter().any(|i| *i == Interaction::Pressed) {
+        let cost = tuning().swing_cost;
+        if node == monkey.at && monkey.path.is_empty() {
+            // Already here.
+        } else if shift.bananas >= cost {
+            shift.bananas -= cost;
+            if monkey.job.is_some_and(|j| j.node != node) {
+                monkey.job = None;
+                net.queued = None;
+            }
+            monkey.swing_to(&net, node);
+            let msg = format!("🌿 swinging to {} (-{cost} 🍌)", net.names[node]);
+            shift.say(msg);
+        } else {
+            shift.say("🍌 no bananas for a swing: fix things to earn them");
+        }
+        net.touch();
+    }
+    if keys.just_pressed(KeyCode::KeyG) || keys.just_pressed(KeyCode::Enter) || go_button.iter().any(|i| *i == Interaction::Pressed) {
         monkey.job = None;
         net.queued = None;
         monkey.send(&net, node);
@@ -808,8 +946,9 @@ fn walk(time: Res<Time>, shift: Res<Shift>, net: Res<Net>, mut monkey: ResMut<Mo
     let mut dt = time.delta_secs();
     while dt > 0.0 {
         let Some(&next) = monkey.path.front() else { break };
-        let base = if monkey.overland { tuning().hike_speed } else { tuning().link_speed };
-        let slow = if net.health[next] == Health::Degraded || net.health[monkey.at] == Health::Degraded { 0.5 } else { 1.0 };
+        let base = if monkey.swing { tuning().swing_speed } else if monkey.overland { tuning().hike_speed } else { tuning().link_speed };
+        let degraded = net.health[next] == Health::Degraded || net.health[monkey.at] == Health::Degraded;
+        let slow = if degraded && !monkey.swing { 0.5 } else { 1.0 };
         let speed = base * slow;
         let step = speed * dt / monkey.leg_len;
         if monkey.leg + step < 1.0 {
@@ -823,7 +962,7 @@ fn walk(time: Res<Time>, shift: Res<Shift>, net: Res<Net>, mut monkey: ResMut<Mo
         }
     }
     monkey.pos = match monkey.path.front() {
-        Some(&next) => net.at[monkey.at].lerp(net.at[next], monkey.leg),
+        Some(&next) => monkey.origin.unwrap_or(net.at[monkey.at]).lerp(net.at[next], monkey.leg),
         None => net.at[monkey.at],
     };
 }
@@ -854,21 +993,27 @@ fn work(mut commands: Commands, time: Res<Time>, art: Res<Art>, mut shift: ResMu
     };
     if job.action == alert.right() {
         let t = tuning();
-        let points = if alert.forecast { t.points_prevent as u32 } else { (t.points_fix + alert.ttl.max(0.0) * t.points_per_ttl_sec) as u32 };
+        shift.combo += 1;
+        let mult = (1.0 + t.combo_step * (shift.combo - 1) as f32).min(t.combo_max);
+        let base = if alert.forecast { t.points_prevent } else { t.points_fix + alert.ttl.max(0.0) * t.points_per_ttl_sec };
+        let points = (base * mult) as u32;
         shift.score += points;
+        shift.bananas += if alert.forecast { t.banana_prevent } else { t.banana_fix };
+        let combo = if shift.combo > 1 { format!(" x{mult:.2}").trim_end_matches('0').trim_end_matches('.').to_string() } else { String::new() };
         net.alerts[node] = None;
         net.health[node] = Health::Online;
         if alert.forecast {
             shift.prevented += 1;
             shift.say(format!("✓ {name}: {} prevented (+{points})", alert.failure.name()));
-            popup(&mut commands, &art, net.at[node], format!("prevented +{points}"), AMBER, now);
+            popup(&mut commands, &art, net.at[node], format!("prevented +{points}{combo} 🍌"), AMBER, now);
         } else {
             shift.fixes += 1;
             shift.say(format!("✓ {name}: {} fixed (+{points})", alert.failure.name()));
-            popup(&mut commands, &art, net.at[node], format!("fixed +{points}"), GREEN_400, now);
+            popup(&mut commands, &art, net.at[node], format!("fixed +{points}{combo} 🍌"), GREEN_400, now);
         }
     } else {
         alert.tried |= 1 << job.option;
+        shift.combo = 0;
         shift.sla -= tuning().wrong_fix_sla;
         if !alert.forecast {
             alert.ttl = (alert.ttl - tuning().wrong_fix_ttl).max(0.5);
@@ -1075,6 +1220,20 @@ fn apply_link(
 
 fn spawn_hud(mut commands: Commands, art: Res<Art>) {
     commands.spawn((
+        IslandBar,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(40),
+            left: px(8),
+            right: px(8),
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: px(6),
+            row_gap: px(4),
+            ..default()
+        },
+        GlobalZIndex(40),
+    ));
+    commands.spawn((
         Node {
             position_type: PositionType::Absolute,
             top: px(16),
@@ -1108,6 +1267,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>) {
                         children![(HudBar, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GREEN_500))],
                     ),
                     (MonkeyText, Text::new(""), art.text(false, 11.0), TextColor(GREEN_300)),
+                    (NextText, Text::new(""), art.text(true, 11.0), TextColor(AMBER)),
                     (
                         StartButton,
                         Interaction::default(),
@@ -1145,6 +1305,8 @@ fn hud(
     mut texts: Query<&mut Text>,
     hud_text: Single<Entity, With<HudText>>,
     monkey_text: Single<Entity, With<MonkeyText>>,
+    next_text: Single<Entity, With<NextText>>,
+    view: Res<ViewState>,
     log_text: Single<Entity, With<LogText>>,
     start_label: Single<Entity, With<StartLabel>>,
     mut bar: Single<(&mut Node, &mut BackgroundColor), With<HudBar>>,
@@ -1155,10 +1317,12 @@ fn hud(
     let line = match shift.phase {
         Phase::Idle => "🐵 ON-CALL · keep the jungle network up until 17:00".to_string(),
         Phase::Running => format!(
-            "🕘 {}  SLA {:.0}%  ★ {}  🚨 {}  🔮 {}",
+            "🕘 {}  SLA {:.0}%  ★ {}{}  🍌 {}  🚨 {}  🔮 {}",
             shift.time_of_day(),
             shift.sla.max(0.0),
             shift.score,
+            if shift.combo > 1 { format!(" 🔥{}", shift.combo) } else { String::new() },
+            shift.bananas,
             incidents,
             if net.sighted() { forecasts.to_string() } else { "?".into() }
         ),
@@ -1181,6 +1345,7 @@ fn hud(
         }
     };
     set(&mut texts, *monkey_text, status);
+    set(&mut texts, *next_text, next_step(&shift, &net, &monkey, &view));
     let running = shift.phase == Phase::Running;
     start_node.display = if running { Display::None } else { Display::Flex };
     let want = if matches!(shift.phase, Phase::Won | Phase::Lost) { "NEW SHIFT (Enter)" } else { "START SHIFT (Enter)" };
@@ -1190,6 +1355,78 @@ fn hud(
     bg.0 = if shift.sla < 30.0 { RED } else { GREEN_500 };
     let log: Vec<&str> = shift.log.iter().filter(|(_, at)| shift.clock - at < 15.0 || !running).map(|(s, _)| s.as_str()).collect();
     set(&mut texts, *log_text, log.join("\n"));
+}
+
+/// One line telling the player what to do now.
+fn next_step(shift: &Shift, net: &Net, monkey: &Monkey, view: &ViewState) -> String {
+    if shift.phase != Phase::Running {
+        return "▶ Enter: start the shift · arrows hop nodes · Q/E islands".into();
+    }
+    let sighted = net.sighted();
+    let visible = |i: usize| net.alerts[i].filter(|a| !a.forecast || sighted);
+    if let Some(sel) = view.selected {
+        if let Some(a) = visible(sel) {
+            if monkey.job.is_some_and(|j| j.node == sel) {
+                return "▶ 🐒 is on it. Tab: next alert, line up the next job".into();
+            }
+            let far = sel != monkey.at || !monkey.path.is_empty();
+            let swing = if far && shift.bananas >= tuning().swing_cost { " · J: swing there first (🍌)" } else { "" };
+            return if a.forecast {
+                format!("▶ Prevent it: 1-4 before the countdown ends{swing}")
+            } else {
+                format!("▶ Pick a fix: 1-4 (wrong ones cost SLA and time){swing}")
+            };
+        }
+    }
+    let worst = (0..net.alerts.len())
+        .filter_map(|i| visible(i).map(|a| (i, a, a.ttl + if a.forecast { 30.0 } else { 0.0 })))
+        .min_by(|a, b| a.2.total_cmp(&b.2));
+    match worst {
+        Some((i, a, _)) => {
+            let glyph = if a.forecast { a.failure.forecast().map_or("🔮", |f| f.0) } else { a.failure.emoji() };
+            format!("▶ {glyph} {} ({:.0}s): Space jumps there", net.names[i], a.ttl.max(0.0))
+        }
+        None => "▶ All quiet: patrol with the arrows, Q/E between islands, G to go".into(),
+    }
+}
+
+/// One chip per island with its open incidents; click flies there.
+fn island_bar(
+    mut commands: Commands,
+    art: Res<Art>,
+    world: Res<World>,
+    net: Res<Net>,
+    mut seen: ResMut<IslandBarVersion>,
+    bar: Single<(Entity, Option<&Children>), With<IslandBar>>,
+) {
+    if seen.0 == Some(net.version) {
+        return;
+    }
+    seen.0 = Some(net.version);
+    let (root, children) = *bar;
+    if let Some(children) = children {
+        for c in children.iter() {
+            commands.entity(c).despawn();
+        }
+    }
+    commands.entity(root).with_children(|bar| {
+        for (k, isl) in world.islands.iter().enumerate() {
+            let members: Vec<usize> = (0..world.nodes.len()).filter(|&i| world.nodes[i].island == isl.id).collect();
+            let hurt = members.iter().filter(|&&i| net.alerts[i].is_some_and(|a| !a.forecast)).count();
+            let down = members.iter().any(|&i| net.health[i] == Health::Down);
+            let color = if down { RED_400 } else if hurt > 0 { AMBER } else { GREEN_300 };
+            let badge = if hurt > 0 { format!(" 🚨{hurt}") } else { String::new() };
+            bar.spawn((
+                IslandChip(k),
+                Blocks,
+                Interaction::default(),
+                Node { padding: UiRect::axes(px(8), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                BorderColor::all(color.with_alpha(0.6)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.93)),
+                children![(Text::new(format!("{} {}{badge}", isl.emoji, isl.name)), art.text(true, 11.0), TextColor(color))],
+            ));
+        }
+    });
 }
 
 /// Open alerts, most urgent first, clickable. Rebuilt when the network changes.
@@ -1257,6 +1494,26 @@ fn live_ttls(net: Res<Net>, mut q: Query<(&PanelTtl, &mut Text)>) {
 }
 
 /// The node panel's top section: the open alert with its fixes (keys 1-4), or a "go here" button.
+fn swing_button(body: &mut ChildSpawnerCommands, art: &Art, shift: &Shift) {
+    let can = shift.bananas >= tuning().swing_cost;
+    let fg = if can { Color::srgb(1.0, 0.88, 0.3) } else { Color::srgb(0.45, 0.45, 0.45) };
+    body.spawn((
+        SwingButton,
+        Interaction::default(),
+        Node {
+            justify_content: JustifyContent::Center,
+            padding: UiRect::axes(px(8), px(6)),
+            margin: UiRect::bottom(px(10)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(4)),
+            ..default()
+        },
+        BorderColor::all(fg.with_alpha(0.5)),
+        BackgroundColor(Color::srgba(0.25, 0.2, 0.0, 0.4)),
+        children![(Text::new(format!("🌿 Swing here (J) · {} of {} 🍌", tuning().swing_cost, shift.bananas)), art.text(true, 12.0), TextColor(fg))],
+    ));
+}
+
 pub fn alert_box(body: &mut ChildSpawnerCommands, art: &Art, net: &Net, shift: &Shift, node: usize) {
     if shift.phase != Phase::Running {
         return;
@@ -1277,8 +1534,10 @@ pub fn alert_box(body: &mut ChildSpawnerCommands, art: &Art, net: &Net, shift: &
             BackgroundColor(GREEN_900.with_alpha(0.4)),
             children![(Text::new("🐒 Send the monkey here (G)"), art.text(true, 12.0), TextColor(GREEN_300))],
         ));
+        swing_button(body, art, shift);
         return;
     };
+    swing_button(body, art, shift);
     let (accent, bg, glyph, title, text) = if a.forecast {
         let (g, t, _) = a.failure.forecast().unwrap_or(("🔮", "", Action::Patch));
         (AMBER, Color::srgba(0.3, 0.2, 0.0, 0.5), g, "FORECAST ·".to_string(), t)

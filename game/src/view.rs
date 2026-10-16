@@ -212,13 +212,9 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, window: Single<&Window
     let (mut tf, mut proj) = cam.into_inner();
     let mut d = Vec2::ZERO;
     for (k, v) in [
-        (KeyCode::ArrowLeft, Vec2::X),
         (KeyCode::KeyA, Vec2::X),
-        (KeyCode::ArrowRight, -Vec2::X),
         (KeyCode::KeyD, -Vec2::X),
-        (KeyCode::ArrowUp, Vec2::Y),
         (KeyCode::KeyW, Vec2::Y),
-        (KeyCode::ArrowDown, -Vec2::Y),
         (KeyCode::KeyS, -Vec2::Y),
     ] {
         if keys.pressed(k) {

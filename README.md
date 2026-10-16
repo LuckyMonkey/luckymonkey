@@ -17,9 +17,11 @@ decisions and known issues, and how to extend it.
 
 The world, the critters and all gameplay tuning are plain JSON in `game/data/`:
 
-- `world.json`: tiles, nodes (positions, connections, names, emoji), decorations, rivers
+- `islands.json`: the archipelago: islands (centre, radius, height, biome, which nodes sit where), rivers, pools, islets
+- `nodes.json`: node definitions (names, emoji, descriptions, API connections; a link between islands gets a vine bridge)
+- `world.json`: GENERATED from those two by `tools/gen-world.py` (deploy.sh data runs it); don't edit by hand
 - `npcs.json`: critters
-- `tuning.json`: every failure (text, emoji, fix, countdown, forecast), every action
+- `tuning.json`: bananas, vine swings, combos, speeds; every failure (text, emoji, fix, countdown, forecast), every action
   (label, emoji, seconds), speeds, SLA drain, spawn rates, scoring, node colours
 
 Edit, then `tools/deploy.sh data`: live in seconds, no Rust build, no restart.

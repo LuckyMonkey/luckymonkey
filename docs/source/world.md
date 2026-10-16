@@ -4,7 +4,7 @@ title: Lucky Monkey source - world.rs
 
 # Source: game/src/world.rs
 
-**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 495 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 545 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -28,6 +28,7 @@ taller terrain in front of it.
 | [const PYRAMID_HEIGHT](#const_pyramid_height) |  |
 | [mod kind](#mod_kind) |  |
 | [struct WorldFile](#struct_worldfile) |  |
+| [struct Island](#struct_island) | A named island of the archipelago (navigation, labels). |
 | [struct TileIn](#struct_tilein) |  |
 | [struct Pos](#struct_pos) |  |
 | [struct NodeData](#struct_nodedata) |  |
@@ -43,6 +44,8 @@ taller terrain in front of it.
 | [const EDGE_ISLANDS](#const_edge_islands) |  |
 | [fn plugin](#fn_plugin) |  |
 | [struct Decos](#struct_decos) |  |
+| [struct Backdrop](#struct_backdrop) |  |
+| [fn spawn_island_labels](#fn_spawn_island_labels) | Each island's name floats over its far (top) edge, faint, like a map label. |
 | [fn atlas_cell](#fn_atlas_cell) | Atlas cell (4x4 grid of 34px cells, 32px payload) for a tile. |
 | [const WHITE_CELL](#const_white_cell) |  |
 | [fn cell_uv](#fn_cell_uv) |  |
@@ -151,6 +154,30 @@ pub(crate) struct WorldFile {
     decorations: Vec<Deco>,
     #[serde(default)]
     streams: Vec<Vec<Pos>>,
+    /// Built by tools/gen-world.py: final terrain, skip the legacy clean-ups.
+    #[serde(default)]
+    baked: bool,
+    #[serde(default)]
+    islands: Vec<Island>,
+    /// Faint far-off islands: [x, y, radius].
+    #[serde(default)]
+    backdrop: Vec<[i32; 3]>,
+}
+```
+
+### struct Island
+
+A named island of the archipelago (navigation, labels).
+
+```rust
+#[derive(Deserialize, Clone)]
+pub struct Island {
+    pub id: String,
+    pub name: String,
+    pub emoji: String,
+    pub center: Pos,
+    #[serde(default)]
+    pub nodes: Vec<String>,
 }
 ```
 
@@ -205,6 +232,8 @@ pub struct NodeData {
     pub security: Option<u8>,
     #[serde(default)]
     pub assets: Vec<String>,
+    #[serde(default)]
+    pub island: String,
 }
 ```
 
@@ -252,6 +281,7 @@ pub struct World {
     pub nodes: Vec<NodeData>,
     /// River centrelines, upstream first (the main river, the Digital River).
     pub streams: Vec<Vec<Pos>>,
+    pub islands: Vec<Island>,
     /// Screen-space bounds of the whole map (Bevy coordinates, y up).
     pub bounds: Rect,
 }
@@ -342,6 +372,8 @@ pub fn plugin(app: &mut App) {
             })
             .or_insert(new);
     }
+    let mut bank_decos = Vec::new();
+    if !file.baked {
     // The temple pyramid generator stacks its layers upside down (widest layer
     // highest). Rebuild it as a stepped pyramid: the more layers cover a cell,
     // the higher it is, so the centre (where the Guardian sits) is the summit.
@@ -372,7 +404,6 @@ pub fn plugin(app: &mut App) {
             }
         }
     }
-    let mut bank_decos = Vec::new();
     for (&k, &h) in &banks {
         tiles.insert(k, Tile::ground(kind::GRASS, h));
         let r = cell_hash(k.0 * 7 + 3, k.1 * 11 + 5);
@@ -381,16 +412,19 @@ pub fn plugin(app: &mut App) {
             bank_decos.push(Deco { kind: kind.into(), position: Pos { x: k.0 as f32, y: k.1 as f32, height: h } });
         }
     }
+    }
     let mut bounds = Rect::EMPTY;
     for (&(x, y), t) in &tiles {
         let p = iso(x as f32, y as f32, t.height);
         bounds = bounds.union_point(p + Vec2::new(-TILE_W, TILE_H)).union_point(p + Vec2::new(TILE_W, -TILE_H - BASE * ELEV));
     }
-    app.insert_resource(World { tiles, nodes: file.nodes, streams: file.streams, bounds });
+    let backdrop = if file.backdrop.is_empty() { EDGE_ISLANDS.to_vec() } else { file.backdrop.iter().map(|b| (b[0], b[1], b[2])).collect() };
+    app.insert_resource(Backdrop(backdrop));
+    app.insert_resource(World { tiles, nodes: file.nodes, streams: file.streams, islands: file.islands, bounds });
     let mut decorations = file.decorations;
     decorations.extend(bank_decos);
     app.insert_resource(Decos(decorations));
-    app.add_systems(Startup, (spawn_terrain, spawn_islands, spawn_backdrop, spawn_decorations, spawn_nodes));
+    app.add_systems(Startup, (spawn_terrain, spawn_islands, spawn_backdrop, spawn_decorations, spawn_nodes, spawn_island_labels));
 }
 ```
 
@@ -399,6 +433,39 @@ pub fn plugin(app: &mut App) {
 ```rust
 #[derive(Resource)]
 struct Decos(Vec<Deco>);
+```
+
+### struct Backdrop
+
+```rust
+#[derive(Resource)]
+struct Backdrop(Vec<(i32, i32, i32)>);
+```
+
+### fn spawn_island_labels
+
+Each island's name floats over its far (top) edge, faint, like a map label.
+
+```rust
+fn spawn_island_labels(mut commands: Commands, world: Res<World>, art: Res<Art>) {
+    for isl in &world.islands {
+        // The highest-on-screen tile within reach of the centre marks the far edge.
+        let (cx, cy) = (isl.center.x as i32, isl.center.y as i32);
+        let top = world
+            .tiles
+            .iter()
+            .filter(|((x, y), _)| (x - cx).abs() <= 9 && (y - cy).abs() <= 9)
+            .map(|(&(x, y), t)| iso(x as f32, y as f32, t.height).y)
+            .fold(f32::MIN, f32::max);
+        let at = Vec2::new(iso(isl.center.x, isl.center.y, 0.0).x, top + 46.0);
+        commands.spawn((
+            Text2d::new(format!("{} {}", isl.emoji, isl.name.to_uppercase())),
+            art.text(true, 36.0),
+            TextColor(Color::srgba(0.75, 1.0, 0.85, 0.55)),
+            Transform::from_translation(at.extend(NODE_Z - 5.0)).with_scale(Vec3::splat(0.5)),
+        ));
+    }
+}
 ```
 
 ### fn atlas_cell
@@ -582,9 +649,9 @@ fn spawn_terrain(
 ### fn spawn_islands
 
 ```rust
-fn spawn_islands(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<ColorMaterial>>) {
+fn spawn_islands(mut commands: Commands, backdrop: Res<Backdrop>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<ColorMaterial>>) {
     let mut buf = MeshBuf::default();
-    for (cx, cy, r) in EDGE_ISLANDS {
+    for &(cx, cy, r) in &backdrop.0 {
         for dx in -r..=r {
             for dy in -r..=r {
                 let dist = ((dx * dx + dy * dy) as f32).sqrt();

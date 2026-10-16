@@ -4,7 +4,7 @@ title: Lucky Monkey source - view.rs
 
 # Source: game/src/view.rs
 
-**The camera: pan, zoom, touch, picking nodes, following, deep-link zoom.** Explained in [interface](../interface.md). 249 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/view.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The camera: pan, zoom, touch, picking nodes, following, deep-link zoom.** Explained in [interface](../interface.md). 245 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/view.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -330,13 +330,9 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, window: Single<&Window
     let (mut tf, mut proj) = cam.into_inner();
     let mut d = Vec2::ZERO;
     for (k, v) in [
-        (KeyCode::ArrowLeft, Vec2::X),
         (KeyCode::KeyA, Vec2::X),
-        (KeyCode::ArrowRight, -Vec2::X),
         (KeyCode::KeyD, -Vec2::X),
-        (KeyCode::ArrowUp, Vec2::Y),
         (KeyCode::KeyW, Vec2::Y),
-        (KeyCode::ArrowDown, -Vec2::Y),
         (KeyCode::KeyS, -Vec2::Y),
     ] {
         if keys.pressed(k) {

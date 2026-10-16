@@ -1,0 +1,34 @@
+{
+  "_about": "The archipelago. Each island floats on its own; vine bridges are drawn for every API link between islands, rivers run as aqueducts across the void. Edit, then `tools/deploy.sh data` (regenerates world.json, seconds). Grid: +x runs down-right on screen, +y down-left. Node offsets are relative to the island centre.",
+  "seed": 8675309,
+  "islands": [
+    { "id": "temple",  "name": "Temple Isle",   "emoji": "🛕", "center": [20, 20], "radius": 7, "height": 2, "biome": "temple",
+      "nodes": { "monkey-statue": [0, 0], "main-router": [4, 1], "dns-shrine": [1, 4], "ai-core-01": [4, 4] } },
+    { "id": "lagoon",  "name": "Lagoon Heights", "emoji": "🫧", "center": [4, 4],   "radius": 6, "height": 4, "biome": "jungle",
+      "nodes": { "logical-lagoon": [2, 2], "mq-falls": [-2, -3], "lizard-node": [3, -2] } },
+    { "id": "volcano", "name": "Ember Isle",     "emoji": "🌋", "center": [-2, 27], "radius": 6, "height": 3, "biome": "volcano",
+      "nodes": { "volcano-core": [0, 0], "crashed-sector": [3, 2], "quantum-nexus": [-1, 4] } },
+    { "id": "canopy",  "name": "Canopy Ridge",   "emoji": "🌳", "center": [27, -2], "radius": 6, "height": 3, "biome": "jungle",
+      "nodes": { "firewall-north": [0, 0], "node-temple-2": [-2, 3], "server-hub": [3, -1], "vault-01": [2, 3] } },
+    { "id": "shore",   "name": "Digital Shore",  "emoji": "💾", "center": [13, 45], "radius": 6, "height": 1, "biome": "jungle",
+      "nodes": { "digital-river": [-1, -2], "node-temple-1": [2, 1], "firewall-south": [-2, 3] } },
+    { "id": "banana",  "name": "Banana Grove",   "emoji": "🍌", "center": [45, 13], "radius": 7, "height": 1, "biome": "grove",
+      "nodes": { "banana-sector": [0, 0], "banana-cache-01": [3, 2], "auth-gate": [-3, 1], "data-archive": [2, -3] } },
+    { "id": "lake",    "name": "Data Lake",      "emoji": "🌊", "center": [34, 50], "radius": 6, "height": 0, "biome": "jungle",
+      "nodes": { "data-lake": [-2, -1], "terminal-01": [2, 3], "switch-01": [3, -1] } },
+    { "id": "watch",   "name": "Watch Isle",     "emoji": "🔭", "center": [50, 34], "radius": 6, "height": 0, "biome": "jungle",
+      "nodes": { "watchtower": [1, 0], "database-cluster": [3, 3], "lb-lilypads": [-3, 1], "cdn-canopy": [0, 4] } }
+  ],
+  "pools": [
+    { "at": [6, 7],   "radius": 2.2, "lagoon": true },
+    { "at": [31, 49], "radius": 2.8 },
+    { "at": [46, 34], "radius": 1.8, "lotus": true }
+  ],
+  "rivers": [
+    { "name": "main", "points": [[2, -2, 7], [3, 1, 5], [5, 5, 4], [14, 8, 3], [24, 10, 2], [34, 20, 1], [40, 28, 1], [46, 34, 0]] },
+    { "name": "digital", "points": [[5, 7, 4], [6, 15, 3], [9, 27, 2], [11, 38, 1], [13, 43, 1], [22, 48, 0], [31, 49, 0]] }
+  ],
+  "islets": 14,
+  "bridge_kind": 4,
+  "deco_density": 0.14
+}

@@ -3,7 +3,7 @@
 #
 #   tools/deploy.sh          build + deploy
 #   tools/deploy.sh build    build only (fridge:~/build/luckymonkey/public/game)
-#   tools/deploy.sh data     push game/data/*.json live (seconds; no Rust build, no restart)
+#   tools/deploy.sh data     regenerate world.json, push game/data/*.json live (seconds; no Rust build, no restart)
 #
 # Freezer has too little disk for a Rust/Bevy build, so the build happens on
 # fridge as user `fridge` (rustup + wasm-bindgen-cli in ~fridge/.cargo).
@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 HOST=fridge@fridge
 B=build/luckymonkey
 
+python3 tools/gen-world.py   # islands.json + nodes.json -> world.json
 validate() { for f in game/data/*.json; do python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" || { echo "invalid JSON: $f"; exit 1; }; done; }
 validate
 if [ "${1:-}" = data ]; then
