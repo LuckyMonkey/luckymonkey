@@ -25,23 +25,34 @@ Container control: `sudo fridge-next luckymonkey up|down|restart|build|logs`.
 
 ## Gameplay: on-call shifts
 
-Nodes are wired by their API connections (vines with packets). Press **Enter**
-to start a shift. Each turn new incidents hit healthy nodes; **Space** jumps to
-the oldest alert, **1-4** (or click) applies a fix. Faster fixes score more, wrong
-fixes cost SLA and make it worse. Anything unfixed when the turn timer runs out
-escalates (degraded -> down), worms crawl to a neighbour, stampedes spill over.
-Turns get shorter and busier; the shift ends when the SLA hits 0.
+You are the on-call monkey 🐒. Nodes are wired by their API connections, with
+data frames streaming along every link (and down both rivers). Press **Enter**
+to start a shift, 09:00 to 17:00 on the clock (8 minutes); survive it with SLA
+left to win.
 
-| Incident | Fix |
-|---|---|
-| 🐘 DDoS stampede | Rate-limit at the firewall |
-| 🐛 Worm | Quarantine the node |
-| ⚖️ Replica disparity (data stores) | Resync replicas from primary |
-| 📦 Bad deploy, no schema change | Roll back |
-| 📦 Bad deploy + migration | Fall forward (hotfix) |
-| ⚡ Lightning strike (storm clouds) | Fail over to standby |
-| 🔐 Expired certificate | Rotate the certificate |
-| 🍌 Memory leak | Restart the service |
+- **Incidents** (🚨, reactive) break a node now and carry a TTL countdown. When
+  it runs out the node goes down; worms crawl to a neighbour, stampedes spill over.
+- **Forecasts** (🔮, proactive) come from the Canopy Watchtower: a cert
+  expiring, a deploy scheduled, a disk filling, a worm signature. Act before the
+  countdown and it never happens. If the Watchtower is down you fly blind.
+- Every fix takes time and is done where the monkey stands. Pick a fix on any node
+  (click it or press 1-4) and the monkey walks the links there, routing around
+  down nodes (or hiking overland, slowly, when there's no route), then works.
+- Wrong fixes cost SLA and time. Down and degraded nodes drain the SLA.
+
+Keys: **Space** most urgent alert · **1-4** fix · **G** send the monkey · **F** find the monkey · **Esc** close.
+
+| Incident | Fix | Forecast (prevent with) |
+|---|---|---|
+| 🐘 DDoS stampede | Rate-limit at the firewall | |
+| 🐛 Worm | Quarantine the node | 🧬 worm signature: Patch |
+| ⚖️ Replica disparity (data stores) | Resync replicas from primary | |
+| 📦 Bad deploy, no schema change | Roll back | 📅 deploy scheduled: Canary |
+| 📦 Bad deploy + migration | Fall forward (hotfix) | 📅 deploy scheduled: Canary |
+| ⚡ Lightning strike (storm clouds) | Fail over to standby | |
+| 🔐 Expired certificate | Rotate the certificate | 🔐 expiring: Rotate |
+| 🍌 Memory leak | Restart the service | |
+| 💾 Disk full (data stores) | Clean up old snapshots | 💾 filling: Clean up |
 
 ## Layout
 

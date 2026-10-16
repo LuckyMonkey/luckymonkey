@@ -2,20 +2,26 @@
 
 //! On-call shifts - the game loop.
 //!
-//! The nodes are wired together by their API connections (vines with packets
-//! running along them). A shift is a run of turns. Each turn new incidents hit
-//! healthy nodes; you have until the turn timer runs out to find each one, read
-//! its symptoms and pick the right fix (1-4). Fast fixes score more. Anything
-//! still broken when the turn ends escalates: degraded nodes go down, worms
-//! crawl to a neighbour, stampedes spill over, and the SLA bleeds. The shift
-//! ends when the SLA hits zero. Storm clouds can strike a node mid-turn.
+//! You are the on-call monkey (🐒). Nodes are wired by their API connections;
+//! frames stream along every link. A shift runs 09:00-17:00 on the clock.
+//!
+//! - **Incidents** (reactive) break a node now and carry a TTL. When the TTL
+//!   runs out the node goes down, worms crawl on, stampedes spill over.
+//! - **Forecasts** (proactive) come from the Watchtower: a cert expiring, a
+//!   deploy scheduled, a disk filling. Act before the countdown and the
+//!   incident never happens. If the Watchtower is down you fly blind.
+//!
+//! Every fix takes time and is done where the monkey stands: pick a fix on any
+//! node and the monkey walks the links there (routing around down nodes, or
+//! hiking overland, slowly, when there's no route), then works. Down and
+//! degraded nodes drain the SLA; the shift is lost when it hits zero.
 
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
 use crate::clouds::Strike;
-use crate::ui::{Blocks, GREEN_300, GREEN_400, GREEN_500, GREEN_900, RED_400};
+use crate::ui::{Blocks, GREEN_300, GREEN_400, GREEN_500, GREEN_900, RED_400, RED_500};
 use crate::view::ViewState;
 use crate::world::{emoji_text, iso, node_color, NodeCard, World, NODE_Z};
 use crate::{Art, Rng, Screen};
@@ -30,6 +36,7 @@ pub enum Failure {
     Surge,
     Cert,
     Leak,
+    DiskFull,
 }
 
 impl Failure {
@@ -42,6 +49,7 @@ impl Failure {
             Failure::Surge => "⚡",
             Failure::Cert => "🔐",
             Failure::Leak => "🍌",
+            Failure::DiskFull => "💾",
         }
     }
     pub fn name(self) -> &'static str {
@@ -54,18 +62,20 @@ impl Failure {
             Failure::Surge => "Lightning strike",
             Failure::Cert => "Expired certificate",
             Failure::Leak => "Memory leak",
+            Failure::DiskFull => "Disk full",
         }
     }
     pub fn symptom(self) -> &'static str {
         match self {
-            Failure::Ddos => "Requests x40. A herd of 9,000 monkeys is hammering one endpoint. Spills onto neighbours if it lasts.",
-            Failure::Worm => "Unknown process copying itself over every API connection. Spreads each turn.",
-            Failure::Disparity => "Replica checksums disagree: two copies, two different banana counts. Data loss when it goes down.",
-            Failure::BadDeploy => "v2.4 went out 3 min ago, error rate 30%. No schema change - v2.3 is still compatible.",
+            Failure::Ddos => "Requests x40. A herd of 9,000 monkeys is hammering one endpoint. Spills onto neighbours once the node falls over.",
+            Failure::Worm => "Unknown process copying itself over every API connection. Crawls to a neighbour each time its timer runs out.",
+            Failure::Disparity => "Replica checksums disagree: two copies, two different banana counts. Data is lost if it goes down.",
+            Failure::BadDeploy => "v2.4 went out and the error rate is 30%. No schema change: v2.3 is still compatible.",
             Failure::Migration => "v2.4 migrated the schema and the error rate is 30%. v2.3 can't read the new tables.",
             Failure::Surge => "Lightning hit the rack. The primary power supply is dead.",
-            Failure::Cert => "TLS handshakes failing since 00:00 UTC. The certificate expired.",
+            Failure::Cert => "TLS handshakes failing. The certificate expired.",
             Failure::Leak => "Banana heap growing 2 GB/min, swap is thrashing. Nothing else is wrong.",
+            Failure::DiskFull => "Disk 100%. Writes failing, logs can't rotate, the replicas are stuck.",
         }
     }
     pub fn fix(self) -> Action {
@@ -78,6 +88,32 @@ impl Failure {
             Failure::Surge => Action::Failover,
             Failure::Cert => Action::RotateCert,
             Failure::Leak => Action::Restart,
+            Failure::DiskFull => Action::Cleanup,
+        }
+    }
+    /// What the Watchtower says before it happens, and the action that prevents it.
+    pub fn forecast(self) -> Option<(&'static str, &'static str, Action)> {
+        match self {
+            Failure::Cert => Some(("🔐", "The TLS certificate is about to expire. Renew it before the countdown ends.", Action::RotateCert)),
+            Failure::BadDeploy | Failure::Migration => {
+                Some(("📅", "A deploy of v2.4 is scheduled. Push it through a canary first and a bad build never reaches everyone.", Action::Canary))
+            }
+            Failure::DiskFull => Some(("💾", "Disk at 85% and climbing. Clear old snapshots before it fills.", Action::Cleanup)),
+            Failure::Worm => Some(("🧬", "A worm signature is spreading in the wild and this node is unpatched.", Action::Patch)),
+            _ => None,
+        }
+    }
+    /// Seconds from appearing to escalating.
+    fn ttl(self) -> f32 {
+        match self {
+            Failure::Ddos => 30.0,
+            Failure::Worm => 35.0,
+            Failure::Disparity => 50.0,
+            Failure::BadDeploy | Failure::Migration => 45.0,
+            Failure::Surge => 28.0,
+            Failure::Cert => 40.0,
+            Failure::Leak => 45.0,
+            Failure::DiskFull => 40.0,
         }
     }
 }
@@ -92,10 +128,13 @@ pub enum Action {
     Failover,
     RotateCert,
     Restart,
+    Canary,
+    Cleanup,
+    Patch,
 }
 
 impl Action {
-    const ALL: [Action; 8] = [
+    const ALL: [Action; 11] = [
         Action::RateLimit,
         Action::Quarantine,
         Action::Resync,
@@ -104,6 +143,9 @@ impl Action {
         Action::Failover,
         Action::RotateCert,
         Action::Restart,
+        Action::Canary,
+        Action::Cleanup,
+        Action::Patch,
     ];
     pub fn emoji(self) -> &'static str {
         match self {
@@ -115,6 +157,9 @@ impl Action {
             Action::Failover => "🔌",
             Action::RotateCert => "🔑",
             Action::Restart => "🔄",
+            Action::Canary => "🐤",
+            Action::Cleanup => "🧹",
+            Action::Patch => "🩹",
         }
     }
     pub fn label(self) -> &'static str {
@@ -127,6 +172,25 @@ impl Action {
             Action::Failover => "Fail over to standby",
             Action::RotateCert => "Rotate the certificate",
             Action::Restart => "Restart the service",
+            Action::Canary => "Canary the deploy",
+            Action::Cleanup => "Clean up old snapshots",
+            Action::Patch => "Patch the node",
+        }
+    }
+    /// Seconds of work at the node.
+    pub fn secs(self) -> f32 {
+        match self {
+            Action::RateLimit => 3.0,
+            Action::Quarantine => 2.5,
+            Action::Resync => 7.0,
+            Action::Rollback => 5.0,
+            Action::FallForward => 8.0,
+            Action::Failover => 4.0,
+            Action::RotateCert => 3.0,
+            Action::Restart => 3.0,
+            Action::Canary => 5.0,
+            Action::Cleanup => 4.0,
+            Action::Patch => 4.0,
         }
     }
 }
@@ -148,27 +212,65 @@ impl Health {
     }
 }
 
+/// Something wrong (or about to be) on a node.
 #[derive(Clone, Copy)]
-pub struct Incident {
+pub struct Alert {
     pub failure: Failure,
-    /// Elapsed seconds when it hit.
-    pub since: f32,
+    /// Not broken yet: act before `ttl` runs out to prevent it.
+    pub forecast: bool,
+    /// Seconds until it hits (forecast) or escalates (incident).
+    pub ttl: f32,
     pub options: [Action; 4],
     /// Bitmask of options already tried (wrong).
     pub tried: u8,
-    pub stage: u8,
+    /// Shift time it appeared; also identifies it.
+    pub since: f32,
 }
 
-/// Live state of the network. `version` bumps on every change so the panel can rebuild.
+impl Alert {
+    pub fn right(&self) -> Action {
+        if self.forecast { self.failure.forecast().map_or(self.failure.fix(), |f| f.2) } else { self.failure.fix() }
+    }
+}
+
+/// Live state of the network. `version` bumps on every change so the UI can rebuild.
 #[derive(Resource)]
 pub struct Net {
     pub health: Vec<Health>,
-    pub incidents: Vec<Option<Incident>>,
+    pub alerts: Vec<Option<Alert>>,
     links: Vec<(usize, usize)>,
     neighbours: Vec<Vec<usize>>,
     /// World position of each node card.
     at: Vec<Vec2>,
+    kinds: Vec<String>,
+    pub names: Vec<String>,
+    /// The Watchtower node (forecasts need it up).
+    watchtower: Option<usize>,
+    /// The fix the monkey is on its way to do, if any: (node, option).
+    pub queued: Option<(usize, usize)>,
     pub version: u32,
+}
+
+impl Net {
+    /// Forecasts are visible while the Watchtower is up.
+    pub fn sighted(&self) -> bool {
+        self.watchtower.is_none_or(|w| self.health[w] != Health::Down)
+    }
+    fn touch(&mut self) {
+        self.version = self.version.wrapping_add(1);
+    }
+    /// Raise an alert on a node that has none. Incidents degrade it right away.
+    fn raise(&mut self, node: usize, alert: Alert) -> bool {
+        if self.alerts[node].is_some() || self.health[node] == Health::Down {
+            return false;
+        }
+        if !alert.forecast {
+            self.health[node] = Health::Degraded;
+        }
+        self.alerts[node] = Some(alert);
+        self.touch();
+        true
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -176,35 +278,92 @@ pub enum Phase {
     #[default]
     Idle,
     Running,
-    Over,
+    Won,
+    Lost,
 }
+
+const SHIFT_SECS: f32 = 480.0;
+const START_HOUR: f32 = 9.0;
+const HOURS: f32 = 8.0;
 
 #[derive(Resource, Default)]
 pub struct Shift {
     pub phase: Phase,
-    turn: u32,
-    left: f32,
-    len: f32,
+    /// Seconds into the shift.
+    clock: f32,
     sla: f32,
     score: u32,
     fixes: u32,
-    reactions: Vec<f32>,
+    prevented: u32,
+    next_incident: f32,
+    next_forecast: f32,
     log: VecDeque<(String, f32)>,
 }
 
-const START_SLA: f32 = 100.0;
-const MAX_LOG: usize = 5;
+impl Shift {
+    fn say(&mut self, s: impl Into<String>) {
+        let now = self.clock;
+        self.log.push_front((s.into(), now));
+        self.log.truncate(5);
+    }
+    /// 0 at 09:00, 1 at 17:00.
+    fn progress(&self) -> f32 {
+        (self.clock / SHIFT_SECS).clamp(0.0, 1.0)
+    }
+    fn time_of_day(&self) -> String {
+        let h = START_HOUR + self.progress() * HOURS;
+        format!("{:02}:{:02}", h as u32, ((h.fract() * 60.0) as u32 / 5) * 5)
+    }
+}
+
+/// The on-call monkey.
+#[derive(Resource)]
+pub struct Monkey {
+    /// Node it is at (or last left).
+    at: usize,
+    /// Nodes still to walk to, in order.
+    path: VecDeque<usize>,
+    /// Progress along the current leg (0..1) and its length.
+    leg: f32,
+    leg_len: f32,
+    /// The current leg isn't a link: hiking overland, slowly.
+    overland: bool,
+    /// Pending or running work.
+    job: Option<Job>,
+    pos: Vec2,
+}
+
+#[derive(Clone, Copy)]
+struct Job {
+    node: usize,
+    option: usize,
+    action: Action,
+    /// Which alert it was ordered for (its `since`).
+    alert: f32,
+    /// Seconds of work left once on site.
+    left: f32,
+    total: f32,
+}
+
+const LINK_SPEED: f32 = 240.0;
+const HIKE_SPEED: f32 = 70.0;
 
 #[derive(Component)]
-struct Link(usize);
+struct LinkLine(usize);
 #[derive(Component)]
-struct Packet {
+struct LinkFrame {
     link: usize,
     forward: bool,
-    phase: f32,
+    offset: f32,
 }
 #[derive(Component)]
 struct Badge(usize);
+#[derive(Component)]
+struct BadgeTtl(usize);
+#[derive(Component)]
+struct MonkeyToken;
+#[derive(Component)]
+struct WorkBar;
 #[derive(Component)]
 struct Popup {
     born: f32,
@@ -212,24 +371,43 @@ struct Popup {
 #[derive(Component)]
 struct HudText;
 #[derive(Component)]
+struct MonkeyText;
+#[derive(Component)]
 struct HudBar;
 #[derive(Component)]
 struct LogText;
 #[derive(Component)]
+struct AlertList;
+#[derive(Component)]
+struct AlertRow(usize);
+#[derive(Component)]
 struct StartButton;
 #[derive(Component)]
 struct StartLabel;
-/// An incident fix button in the node panel (built by ui.rs), by option index.
+/// A fix button in the node panel (built by `alert_box`), by option index.
 #[derive(Component)]
 pub struct ActionButton(pub usize);
+/// "Send the monkey here" button in the node panel.
+#[derive(Component)]
+pub struct GoButton;
+/// Live countdown text (alert list and node panel).
+#[derive(Component)]
+pub struct PanelTtl(pub usize);
+
+#[derive(Resource, Default)]
+struct AlertListVersion(Option<u32>);
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Shift>()
+        .init_resource::<AlertListVersion>()
         .add_systems(Startup, setup_net)
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), spawn_hud)
-        .add_systems(Update, (links, packets, cards, popups))
-        .add_systems(Update, (controls, turns, strikes, hud).chain().run_if(in_state(Screen::Playing)));
+        .add_systems(Update, (links, frames, cards, popups, monkey_token))
+        .add_systems(
+            Update,
+            (controls, walk, work, clock, strikes, hud, alert_list, live_ttls).chain().run_if(in_state(Screen::Playing)),
+        );
 }
 
 fn data_health(status: Option<&str>) -> Health {
@@ -258,7 +436,7 @@ fn setup_net(mut commands: Commands, world: Res<World>) {
         neighbours[a].push(b);
         neighbours[b].push(a);
     }
-    let at = world
+    let at: Vec<Vec2> = world
         .nodes
         .iter()
         .map(|node| {
@@ -266,39 +444,54 @@ fn setup_net(mut commands: Commands, world: Res<World>) {
             iso(p.x, p.y, world.ground(p.x, p.y).max(p.height))
         })
         .collect();
+    let home = world.nodes.iter().position(|n| n.kind == "monkey").unwrap_or(0);
+    commands.insert_resource(Monkey { at: home, path: VecDeque::new(), leg: 0.0, leg_len: 1.0, overland: false, job: None, pos: at[home] });
     commands.insert_resource(Net {
         health: world.nodes.iter().map(|n| data_health(n.status.as_deref())).collect(),
-        incidents: vec![None; n],
+        alerts: vec![None; n],
         links,
         neighbours,
         at,
+        kinds: world.nodes.iter().map(|n| n.kind.clone()).collect(),
+        names: world.nodes.iter().map(|n| n.name.clone()).collect(),
+        watchtower: world.nodes.iter().position(|n| n.kind == "monitor"),
+        queued: None,
         version: 0,
     });
 }
 
-/// Vines between connected nodes, packets on them, and an alert badge per node card.
-fn spawn_overlay(mut commands: Commands, net: Res<Net>, art: Res<Art>, cards: Query<(Entity, &NodeCard)>) {
+const FRAME_GAP: f32 = 34.0;
+
+/// Links with a stream of frames each way, the monkey, and an alert badge per node card.
+fn spawn_overlay(mut commands: Commands, net: Res<Net>, monkey: Res<Monkey>, art: Res<Art>, cards: Query<(Entity, &NodeCard)>) {
     for (i, &(a, b)) in net.links.iter().enumerate() {
         let (pa, pb) = (net.at[a], net.at[b]);
         let d = pb - pa;
         commands.spawn((
-            Link(i),
-            Sprite::from_color(Color::WHITE, Vec2::new(d.length(), 3.0)),
+            LinkLine(i),
+            Sprite::from_color(Color::WHITE, Vec2::new(d.length(), 2.0)),
             Transform::from_translation(((pa + pb) / 2.0).extend(NODE_Z - 2.0)).with_rotation(Quat::from_rotation_z(d.to_angle())),
         ));
-        for (k, forward) in [(0.0, true), (0.5, false)] {
-            commands.spawn((
-                Packet { link: i, forward, phase: k + i as f32 * 0.37 },
-                Sprite { image: art.dot.clone(), color: Color::WHITE, custom_size: Some(Vec2::splat(9.0)), ..default() },
-                Transform::from_translation(pa.extend(NODE_Z - 1.0)),
-            ));
+        let count = (d.length() / FRAME_GAP).max(1.0) as usize;
+        for forward in [true, false] {
+            for k in 0..count {
+                commands.spawn((
+                    LinkFrame { link: i, forward, offset: (k as f32 + if forward { 0.0 } else { 0.5 }) / count as f32 },
+                    Sprite { image: art.frame.clone(), color: Color::WHITE, custom_size: Some(Vec2::new(12.0, 7.0)), ..default() },
+                    Transform::from_translation(pa.extend(NODE_Z - 1.0)),
+                ));
+            }
         }
     }
     for (e, card) in &cards {
         commands.entity(e).with_children(|c| {
-            c.spawn((Badge(card.0), emoji_text(&art, "⚠️", 30.0), Transform::from_xyz(0.0, 58.0, 0.01).with_scale(Vec3::splat(0.5)), Visibility::Hidden));
+            c.spawn((Badge(card.0), emoji_text(&art, "⚠️", 30.0), Transform::from_xyz(0.0, 62.0, 0.01).with_scale(Vec3::splat(0.5)), Visibility::Hidden))
+                .with_child((BadgeTtl(card.0), Text2d::new(""), art.text(true, 22.0), TextColor(RED_400), Transform::from_xyz(0.0, 40.0, 0.01)));
         });
     }
+    commands
+        .spawn((MonkeyToken, emoji_text(&art, "🐒", 34.0), Transform::from_translation(monkey.pos.extend(NODE_Z + 30.0)).with_scale(Vec3::splat(0.5))))
+        .with_child((WorkBar, Sprite::from_color(Color::srgb(1.0, 0.85, 0.2), Vec2::new(60.0, 6.0)), Transform::from_xyz(0.0, -44.0, 0.01), Visibility::Hidden));
 }
 
 fn link_health(net: &Net, l: usize) -> Health {
@@ -313,43 +506,60 @@ fn link_health(net: &Net, l: usize) -> Health {
 const AMBER: Color = Color::srgb(0.98, 0.75, 0.14);
 const RED: Color = Color::srgb(0.94, 0.27, 0.27);
 
-fn links(net: Res<Net>, time: Res<Time>, mut q: Query<(&Link, &mut Sprite)>) {
-    let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 6.0).sin();
+fn links(net: Res<Net>, mut q: Query<(&LinkLine, &mut Sprite)>) {
     for (link, mut sprite) in &mut q {
         sprite.color = match link_health(&net, link.0) {
-            Health::Online => GREEN_400.with_alpha(0.35),
-            Health::Degraded => AMBER.with_alpha(0.35 + 0.35 * pulse),
-            Health::Down => RED.with_alpha(0.25),
+            Health::Online => GREEN_400.with_alpha(0.18),
+            Health::Degraded => AMBER.with_alpha(0.3),
+            Health::Down => RED.with_alpha(0.22),
         };
     }
 }
 
-fn packets(net: Res<Net>, time: Res<Time>, mut q: Query<(&Packet, &mut Transform, &mut Sprite, &mut Visibility)>) {
+/// Frames ride each link both ways, in two lanes. A stampede floods its links
+/// with fast red frames heading in; a down link stalls (frames stop, dim red).
+fn frames(net: Res<Net>, time: Res<Time>, mut q: Query<(&LinkFrame, &mut Transform, &mut Sprite)>) {
     let t = time.elapsed_secs();
-    for (p, mut tf, mut sprite, mut vis) in &mut q {
-        let (a, b) = net.links[p.link];
-        let health = link_health(&net, p.link);
-        // A stampede floods its links with fast red packets heading in.
-        let flood = [a, b].iter().find(|&&n| net.incidents[n].is_some_and(|i| i.failure == Failure::Ddos)).copied();
-        if health == Health::Down && flood.is_none() {
-            *vis = Visibility::Hidden;
-            continue;
-        }
-        *vis = Visibility::Inherited;
+    for (f, mut tf, mut sprite) in &mut q {
+        let (a, b) = net.links[f.link];
+        let health = link_health(&net, f.link);
+        let flood = [a, b].into_iter().find(|&n| net.alerts[n].is_some_and(|x| !x.forecast && x.failure == Failure::Ddos));
         let len = net.at[a].distance(net.at[b]).max(1.0);
-        let speed = if flood.is_some() { 420.0 } else { 90.0 };
-        let k = (t * speed / len + p.phase).fract();
+        let (speed, color) = match (flood, health) {
+            (Some(_), _) => (300.0, RED.with_alpha(0.9)),
+            (None, Health::Down) => (0.0, RED.with_alpha(0.3)),
+            (None, Health::Degraded) => (25.0, AMBER.with_alpha(0.8)),
+            (None, Health::Online) => (60.0, Color::srgba(0.7, 1.0, 0.85, 0.75)),
+        };
+        let k = (t * speed / len + f.offset).fract();
         let (from, to) = match flood {
             Some(n) => (if n == a { b } else { a }, n),
-            None if p.forward => (a, b),
+            None if f.forward => (a, b),
             None => (b, a),
         };
-        tf.translation = net.at[from].lerp(net.at[to], k).extend(NODE_Z - 1.0);
-        sprite.color = match (flood, health) {
-            (Some(_), _) => RED,
-            (_, Health::Degraded) => AMBER,
-            _ => Color::srgb(0.75, 1.0, 0.85),
-        };
+        let dir = (net.at[to] - net.at[from]).normalize_or_zero();
+        // Keep to the right so the two directions don't overlap.
+        let lane = Vec2::new(dir.y, -dir.x) * if flood.is_some() { 0.0 } else { 4.0 };
+        // Stay clear of the node cards at either end.
+        let margin = (42.0 / len).min(0.45);
+        let k = margin + k * (1.0 - 2.0 * margin);
+        tf.translation = (net.at[from].lerp(net.at[to], k) + lane).extend(NODE_Z - 1.0);
+        tf.rotation = Quat::from_rotation_z(dir.to_angle());
+        sprite.color = color;
+    }
+}
+
+fn spreads(f: Failure) -> bool {
+    matches!(f, Failure::Worm | Failure::Ddos)
+}
+
+fn ttl_text(a: &Alert, health: Health) -> String {
+    if a.forecast {
+        format!("in {:.0}s", a.ttl.max(0.0))
+    } else if health == Health::Down && !spreads(a.failure) {
+        "DOWN".into()
+    } else {
+        format!("⏳{:.0}s", a.ttl.max(0.0))
     }
 }
 
@@ -358,7 +568,8 @@ fn cards(
     time: Res<Time>,
     world: Res<World>,
     mut cards: Query<(&NodeCard, &mut Sprite)>,
-    mut badges: Query<(&Badge, &mut Text2d, &mut Transform, &mut Visibility)>,
+    mut badges: Query<(&Badge, &mut Text2d, &mut Transform, &mut Visibility), Without<BadgeTtl>>,
+    mut ttls: Query<(&BadgeTtl, &mut Text2d, &mut TextColor), Without<Badge>>,
 ) {
     let t = time.elapsed_secs();
     let pulse = 0.5 + 0.5 * (t * 7.0).sin();
@@ -370,15 +581,51 @@ fn cards(
             Health::Down => Color::srgba(0.18, 0.1, 0.1, 0.95),
         };
     }
+    let sighted = net.sighted();
     for (badge, mut text, mut tf, mut vis) in &mut badges {
-        match net.incidents[badge.0] {
-            Some(inc) => {
-                text.0 = inc.failure.emoji().into();
-                tf.translation.y = 58.0 + (t * 4.0 + badge.0 as f32).sin() * 4.0;
+        match net.alerts[badge.0].filter(|a| !a.forecast || sighted) {
+            Some(a) => {
+                let glyph = if a.forecast { a.failure.forecast().map_or("🔮", |f| f.0) } else { a.failure.emoji() };
+                if text.0 != glyph {
+                    text.0 = glyph.into();
+                }
+                tf.translation.y = 62.0 + (t * 4.0 + badge.0 as f32).sin() * 3.0;
                 *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
         }
+    }
+    for (ttl, mut text, mut color) in &mut ttls {
+        if let Some(a) = net.alerts[ttl.0] {
+            let s = ttl_text(&a, net.health[ttl.0]);
+            if text.0 != s {
+                text.0 = s;
+            }
+            color.0 = if a.forecast { AMBER } else { RED_400 };
+        }
+    }
+}
+
+fn monkey_token(
+    time: Res<Time>,
+    monkey: Res<Monkey>,
+    mut token: Single<&mut Transform, (With<MonkeyToken>, Without<WorkBar>)>,
+    mut bar: Single<(&mut Transform, &mut Visibility), (With<WorkBar>, Without<MonkeyToken>)>,
+) {
+    let t = time.elapsed_secs();
+    let walking = !monkey.path.is_empty();
+    let hop = if walking { (t * 12.0).sin().abs() * 6.0 } else { 0.0 };
+    // Stand beside the card, not on it.
+    token.translation = (monkey.pos + Vec2::new(34.0, 30.0 + hop)).extend(NODE_Z + 30.0);
+    let (bar_tf, vis) = &mut *bar;
+    match monkey.job.filter(|j| !walking && j.node == monkey.at) {
+        Some(j) => {
+            let done = 1.0 - (j.left / j.total).clamp(0.0, 1.0);
+            bar_tf.scale.x = done.max(0.02);
+            bar_tf.translation.x = -30.0 * (1.0 - done);
+            **vis = Visibility::Inherited;
+        }
+        None => **vis = Visibility::Hidden,
     }
 }
 
@@ -396,47 +643,29 @@ fn popups(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &Popup,
     let now = time.elapsed_secs();
     for (e, p, mut tf, mut color) in &mut q {
         let age = now - p.born;
-        if age > 1.6 {
+        if age > 2.0 {
             commands.entity(e).despawn();
             continue;
         }
-        tf.translation.y += 30.0 * time.delta_secs();
-        color.0 = color.0.with_alpha((1.6 - age).min(1.0));
+        tf.translation.y += 25.0 * time.delta_secs();
+        color.0 = color.0.with_alpha((2.0 - age).min(1.0));
     }
 }
 
-impl Shift {
-    fn say(&mut self, s: impl Into<String>, now: f32) {
-        self.log.push_front((s.into(), now));
-        self.log.truncate(MAX_LOG);
-    }
-}
-
-/// Is this node a data store (gets replica disparity)?
+/// Data stores get replica trouble and full disks.
 fn is_store(kind: &str) -> bool {
-    matches!(kind, "database" | "banana-cache" | "vault" | "river")
+    matches!(kind, "database" | "banana-cache" | "vault" | "lake" | "queue")
 }
 
-fn roll_failure(rng: &mut Rng, kind: &str) -> Failure {
-    if is_store(kind) && rng.f32() < 0.45 {
-        return Failure::Disparity;
-    }
-    if kind == "volcano" && rng.f32() < 0.5 {
-        return Failure::Surge;
-    }
-    [Failure::Ddos, Failure::Worm, Failure::BadDeploy, Failure::Migration, Failure::Cert, Failure::Leak][rng.below(6)]
-}
-
-fn new_incident(rng: &mut Rng, failure: Failure, now: f32) -> Incident {
-    let fix = failure.fix();
-    let mut pool: Vec<Action> = Action::ALL.into_iter().filter(|a| *a != fix).collect();
-    // Rollback and fall-forward are the classic confusion; offer the other one when it applies.
-    let twin = match fix {
+fn options_for(rng: &mut Rng, right: Action) -> [Action; 4] {
+    let mut pool: Vec<Action> = Action::ALL.into_iter().filter(|a| *a != right).collect();
+    // Rollback vs fall-forward is the classic confusion: offer the other one when it applies.
+    let twin = match right {
         Action::Rollback => Some(Action::FallForward),
         Action::FallForward => Some(Action::Rollback),
         _ => None,
     };
-    let mut options = vec![fix];
+    let mut options = vec![right];
     if let Some(t) = twin {
         pool.retain(|a| *a != t);
         options.push(t);
@@ -447,55 +676,157 @@ fn new_incident(rng: &mut Rng, failure: Failure, now: f32) -> Incident {
     for i in (1..4).rev() {
         options.swap(i, rng.below(i + 1));
     }
-    Incident { failure, since: now, options: [options[0], options[1], options[2], options[3]], tried: 0, stage: 0 }
+    [options[0], options[1], options[2], options[3]]
 }
 
-impl Net {
-    fn strike(&mut self, node: usize, inc: Incident) -> bool {
-        if self.incidents[node].is_some() || self.health[node] == Health::Down {
-            return false;
-        }
-        self.incidents[node] = Some(inc);
-        self.health[node] = Health::Degraded;
-        self.version += 1;
-        true
-    }
+fn incident(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
+    Alert { failure, forecast: false, ttl: failure.ttl(), options: options_for(rng, failure.fix()), tried: 0, since: now }
 }
 
-fn start(shift: &mut Shift, net: &mut Net, now: f32) {
-    *shift = Shift { phase: Phase::Running, turn: 0, left: 0.0, len: 16.0, sla: START_SLA, ..default() };
+fn forecast(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
+    let right = failure.forecast().map_or(failure.fix(), |f| f.2);
+    Alert { failure, forecast: true, ttl: 50.0 + rng.f32() * 30.0, options: options_for(rng, right), tried: 0, since: now }
+}
+
+fn start(shift: &mut Shift, net: &mut Net, monkey: &mut Monkey) {
+    *shift = Shift { phase: Phase::Running, sla: 100.0, next_incident: 6.0, next_forecast: 14.0, ..default() };
     net.health.iter_mut().for_each(|h| *h = Health::Online);
-    net.incidents.iter_mut().for_each(|i| *i = None);
-    net.version += 1;
-    shift.say("Shift started. Space jumps to the next alert, 1-4 applies a fix.", now);
+    net.alerts.iter_mut().for_each(|a| *a = None);
+    net.queued = None;
+    net.touch();
+    monkey.path.clear();
+    monkey.job = None;
+    shift.say("09:00, shift started. Click a node and pick a fix: the monkey walks there and does it.");
+}
+
+/// Shortest walk from `from` to `to` over the links. Down nodes can't be
+/// crossed (only arrived at); links touching degraded nodes are slow.
+fn route(net: &Net, from: usize, to: usize) -> Option<Vec<usize>> {
+    let n = net.at.len();
+    let mut dist = vec![f32::INFINITY; n];
+    let mut prev = vec![usize::MAX; n];
+    let mut done = vec![false; n];
+    dist[from] = 0.0;
+    while let Some(u) = (0..n).filter(|&i| !done[i] && dist[i].is_finite()).min_by(|&a, &b| dist[a].total_cmp(&dist[b])) {
+        if u == to {
+            break;
+        }
+        done[u] = true;
+        if u != from && net.health[u] == Health::Down {
+            continue;
+        }
+        for &v in &net.neighbours[u] {
+            let slow = if net.health[u] == Health::Degraded || net.health[v] == Health::Degraded { 2.0 } else { 1.0 };
+            let d = dist[u] + net.at[u].distance(net.at[v]) * slow;
+            if d < dist[v] {
+                dist[v] = d;
+                prev[v] = u;
+            }
+        }
+    }
+    if !dist[to].is_finite() {
+        return None;
+    }
+    let mut path = vec![to];
+    while *path.last().unwrap() != from {
+        path.push(prev[*path.last().unwrap()]);
+    }
+    path.reverse();
+    Some(path)
+}
+
+/// Seconds until the monkey reaches `to` on its current plan (roughly).
+fn eta(net: &Net, monkey: &Monkey, to: usize) -> f32 {
+    let Some(&next) = monkey.path.front() else {
+        return if monkey.at == to { 0.0 } else { net.at[monkey.at].distance(net.at[to]) / LINK_SPEED };
+    };
+    let speed = |overland: bool| if overland { HIKE_SPEED } else { LINK_SPEED };
+    let mut t = (1.0 - monkey.leg) * monkey.leg_len / speed(monkey.overland);
+    let mut prev = next;
+    for &p in monkey.path.iter().skip(1) {
+        t += net.at[prev].distance(net.at[p]) / speed(!net.neighbours[prev].contains(&p));
+        prev = p;
+    }
+    t
+}
+
+impl Monkey {
+    /// Head for `to`. A leg in progress is finished first.
+    fn send(&mut self, net: &Net, to: usize) {
+        let walking = self.path.front().copied();
+        let from = walking.unwrap_or(self.at);
+        self.path.clear();
+        if let Some(next) = walking {
+            self.path.push_back(next);
+        }
+        if from != to {
+            match route(net, from, to) {
+                Some(p) => self.path.extend(p.into_iter().skip(1)),
+                None => self.path.push_back(to),
+            }
+        }
+        if walking.is_none() {
+            self.begin_leg(net);
+        }
+    }
+    fn begin_leg(&mut self, net: &Net) {
+        self.leg = 0.0;
+        if let Some(&next) = self.path.front() {
+            self.leg_len = net.at[self.at].distance(net.at[next]).max(1.0);
+            self.overland = !net.neighbours[self.at].contains(&next);
+        }
+    }
 }
 
 fn controls(
-    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    art: Res<Art>,
-    world: Res<World>,
     mut shift: ResMut<Shift>,
     mut net: ResMut<Net>,
+    mut monkey: ResMut<Monkey>,
     mut view: ResMut<ViewState>,
     start_button: Query<&Interaction, (With<StartButton>, Changed<Interaction>)>,
+    go_button: Query<&Interaction, (With<GoButton>, Changed<Interaction>)>,
     action_buttons: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
+    rows: Query<(&Interaction, &AlertRow), Changed<Interaction>>,
 ) {
-    let now = time.elapsed_secs();
     let start_pressed = start_button.iter().any(|i| *i == Interaction::Pressed);
     if shift.phase != Phase::Running {
         if start_pressed || keys.just_pressed(KeyCode::Enter) {
-            start(&mut shift, &mut net, now);
+            start(&mut shift, &mut net, &mut monkey);
         }
         return;
     }
+    for (i, row) in &rows {
+        if *i == Interaction::Pressed {
+            view.selected = Some(row.0);
+            view.focus = Some(net.at[row.0]);
+        }
+    }
     if keys.just_pressed(KeyCode::Space) {
-        // Jump to the oldest open incident.
-        if let Some((i, _)) = net.incidents.iter().enumerate().filter_map(|(i, x)| x.map(|x| (i, x.since))).min_by(|a, b| a.1.total_cmp(&b.1)) {
+        // Most urgent visible alert first; incidents before forecasts.
+        let sighted = net.sighted();
+        let pick = net
+            .alerts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| a.filter(|a| !a.forecast || sighted).map(|a| (i, a.ttl + if a.forecast { 30.0 } else { 0.0 })))
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = pick {
             view.selected = Some(i);
             view.focus = Some(net.at[i]);
         }
+    }
+    if keys.just_pressed(KeyCode::KeyF) {
+        view.focus = Some(monkey.pos);
+    }
+    let Some(node) = view.selected else { return };
+    if keys.just_pressed(KeyCode::KeyG) || go_button.iter().any(|i| *i == Interaction::Pressed) {
+        monkey.job = None;
+        net.queued = None;
+        monkey.send(&net, node);
+        let msg = format!("🐒 heading to {}", net.names[node]);
+        shift.say(msg);
+        net.touch();
     }
     let mut choice = None;
     for (n, k) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].into_iter().enumerate() {
@@ -508,130 +839,232 @@ fn controls(
             choice = Some(b.0);
         }
     }
-    let (Some(choice), Some(node)) = (choice, view.selected) else { return };
-    let Some(mut inc) = net.incidents[node] else { return };
-    if inc.tried & (1 << choice) != 0 {
+    let Some(choice) = choice else { return };
+    let Some(alert) = net.alerts[node] else { return };
+    if (alert.forecast && !net.sighted()) || alert.tried & (1 << choice) != 0 {
         return;
     }
-    let action = inc.options[choice];
-    let name = &world.nodes[node].name;
-    if action == inc.failure.fix() {
-        let reaction = now - inc.since;
-        let points = (100.0 * (1.0 - reaction / 20.0).clamp(0.1, 1.0)) as u32 + 10 * shift.turn;
-        shift.score += points;
-        shift.fixes += 1;
-        shift.reactions.push(reaction);
-        net.incidents[node] = None;
-        net.health[node] = Health::Online;
-        shift.say(format!("✓ {name}: {} fixed in {reaction:.1}s (+{points})", inc.failure.name()), now);
-        popup(&mut commands, &art, net.at[node], format!("+{points}  {reaction:.1}s"), GREEN_400, now);
-    } else {
-        inc.tried |= 1 << choice;
-        inc.stage += 1;
-        shift.sla -= 3.0;
-        net.health[node] = if inc.stage >= 2 { Health::Down } else { Health::Degraded };
-        net.incidents[node] = Some(inc);
-        shift.say(format!("✗ {name}: \"{}\" made it worse", action.label()), now);
-        popup(&mut commands, &art, net.at[node], "✗ SLA -3".into(), RED_400, now);
-    }
-    net.version += 1;
+    let action = alert.options[choice];
+    let total = action.secs() * if net.health[node] == Health::Down { 1.5 } else { 1.0 };
+    monkey.job = Some(Job { node, option: choice, action, alert: alert.since, left: total, total });
+    monkey.send(&net, node);
+    net.queued = Some((node, choice));
+    let msg = format!("🐒 {} {} at {}", action.emoji(), action.label(), net.names[node]);
+    shift.say(msg);
+    net.touch();
 }
 
-fn turns(time: Res<Time>, world: Res<World>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut net: ResMut<Net>) {
+/// Move the monkey along its path.
+fn walk(time: Res<Time>, shift: Res<Shift>, net: Res<Net>, mut monkey: ResMut<Monkey>) {
     if shift.phase != Phase::Running {
         return;
     }
-    let now = time.elapsed_secs();
-    shift.left -= time.delta_secs();
-    if shift.left > 0.0 {
-        if shift.sla <= 0.0 {
-            end(&mut shift, now);
+    let mut dt = time.delta_secs();
+    while dt > 0.0 {
+        let Some(&next) = monkey.path.front() else { break };
+        let base = if monkey.overland { HIKE_SPEED } else { LINK_SPEED };
+        let slow = if net.health[next] == Health::Degraded || net.health[monkey.at] == Health::Degraded { 0.5 } else { 1.0 };
+        let speed = base * slow;
+        let step = speed * dt / monkey.leg_len;
+        if monkey.leg + step < 1.0 {
+            monkey.leg += step;
+            dt = 0.0;
+        } else {
+            dt -= (1.0 - monkey.leg) * monkey.leg_len / speed;
+            monkey.at = next;
+            monkey.path.pop_front();
+            monkey.begin_leg(&net);
         }
+    }
+    monkey.pos = match monkey.path.front() {
+        Some(&next) => net.at[monkey.at].lerp(net.at[next], monkey.leg),
+        None => net.at[monkey.at],
+    };
+}
+
+/// Do the queued fix once on site.
+fn work(mut commands: Commands, time: Res<Time>, art: Res<Art>, mut shift: ResMut<Shift>, mut net: ResMut<Net>, mut monkey: ResMut<Monkey>) {
+    if shift.phase != Phase::Running {
         return;
     }
-    // End of turn: everything still broken escalates.
+    let Some(mut job) = monkey.job else { return };
+    if !monkey.path.is_empty() || monkey.at != job.node {
+        return;
+    }
+    job.left -= time.delta_secs();
+    if job.left > 0.0 {
+        monkey.job = Some(job);
+        return;
+    }
+    monkey.job = None;
+    net.queued = None;
+    net.touch();
+    let now = time.elapsed_secs();
+    let node = job.node;
+    let name = net.names[node].clone();
+    let Some(mut alert) = net.alerts[node].filter(|a| a.since == job.alert) else {
+        shift.say(format!("🐒 {name}: nothing left to fix"));
+        return;
+    };
+    if job.action == alert.right() {
+        let points = if alert.forecast { 150 } else { 100 + (alert.ttl.max(0.0) * 2.0) as u32 };
+        shift.score += points;
+        net.alerts[node] = None;
+        net.health[node] = Health::Online;
+        if alert.forecast {
+            shift.prevented += 1;
+            shift.say(format!("✓ {name}: {} prevented (+{points})", alert.failure.name()));
+            popup(&mut commands, &art, net.at[node], format!("prevented +{points}"), AMBER, now);
+        } else {
+            shift.fixes += 1;
+            shift.say(format!("✓ {name}: {} fixed (+{points})", alert.failure.name()));
+            popup(&mut commands, &art, net.at[node], format!("fixed +{points}"), GREEN_400, now);
+        }
+    } else {
+        alert.tried |= 1 << job.option;
+        shift.sla -= 2.0;
+        if !alert.forecast {
+            alert.ttl = (alert.ttl - 8.0).max(0.5);
+        }
+        net.alerts[node] = Some(alert);
+        shift.say(format!("✗ {name}: \"{}\" didn't help", job.action.label()));
+        popup(&mut commands, &art, net.at[node], "✗ didn't help".into(), RED_400, now);
+    }
+}
+
+/// The shift clock: countdowns, escalation, SLA drain, new trouble.
+fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut net: ResMut<Net>) {
+    if shift.phase != Phase::Running {
+        return;
+    }
+    let dt = time.delta_secs();
+    shift.clock += dt;
     let n = net.health.len();
-    let mut damage = 0.0;
     let mut spread = Vec::new();
     for i in 0..n {
-        let Some(mut inc) = net.incidents[i] else { continue };
-        inc.stage += 1;
-        net.health[i] = if inc.stage >= 2 { Health::Down } else { Health::Degraded };
-        net.incidents[i] = Some(inc);
-        match inc.failure {
-            Failure::Worm => spread.push((i, Failure::Worm)),
-            Failure::Ddos if inc.stage >= 2 => spread.push((i, Failure::Ddos)),
-            _ => {}
+        let Some(mut a) = net.alerts[i] else { continue };
+        a.ttl -= dt;
+        if a.ttl <= 0.0 {
+            let name = net.names[i].clone();
+            if a.forecast {
+                // Nobody acted in time: it happens.
+                let hit = match a.failure {
+                    Failure::BadDeploy | Failure::Migration if rng.f32() < 0.5 => Failure::Migration,
+                    Failure::BadDeploy | Failure::Migration => Failure::BadDeploy,
+                    f => f,
+                };
+                a = incident(&mut rng, hit, shift.clock);
+                net.health[i] = Health::Degraded;
+                shift.say(format!("🚨 {} {} on {name}", hit.emoji(), hit.name()));
+            } else {
+                a.ttl = 40.0;
+                if net.health[i] != Health::Down {
+                    net.health[i] = Health::Down;
+                    shift.say(format!("⛔ {name} is down ({})", a.failure.name()));
+                    if a.failure == Failure::Disparity {
+                        shift.sla -= 6.0;
+                        shift.say(format!("💥 {name}: replicas diverged, data lost"));
+                    }
+                }
+                if spreads(a.failure) {
+                    spread.push((i, a.failure));
+                }
+            }
+            net.touch();
         }
-        if inc.failure == Failure::Disparity && inc.stage == 2 {
-            damage += 6.0;
-            shift.say(format!("💥 {}: replicas diverged, data lost", world.nodes[i].name), now);
-        }
+        net.alerts[i] = Some(a);
     }
     for (from, failure) in spread {
-        let healthy: Vec<usize> = net.neighbours[from].iter().copied().filter(|&j| net.incidents[j].is_none() && net.health[j] != Health::Down).collect();
+        let healthy: Vec<usize> = net.neighbours[from].iter().copied().filter(|&j| net.alerts[j].is_none() && net.health[j] == Health::Online).collect();
         if healthy.is_empty() {
             continue;
         }
         let j = healthy[rng.below(healthy.len())];
-        let inc = new_incident(&mut rng, failure, now);
-        if net.strike(j, inc) {
-            shift.say(format!("{} {} spread from {} to {}", failure.emoji(), failure.name(), world.nodes[from].name, world.nodes[j].name), now);
+        let alert = incident(&mut rng, failure, shift.clock);
+        if net.raise(j, alert) {
+            let msg = format!("{} {} spread from {} to {}", failure.emoji(), failure.name(), net.names[from], net.names[j]);
+            shift.say(msg);
         }
     }
-    for h in &net.health {
-        damage += match h {
+    let drain: f32 = net
+        .health
+        .iter()
+        .map(|h| match h {
             Health::Online => 0.0,
-            Health::Degraded => 1.0,
-            Health::Down => 4.0,
-        };
-    }
-    shift.sla -= damage;
-    if shift.sla <= 0.0 {
-        end(&mut shift, now);
-        net.version += 1;
-        return;
-    }
-    // Next turn: shorter, with more incidents.
-    shift.turn += 1;
-    shift.len = (16.0 - shift.turn as f32 * 0.8).max(6.0);
-    shift.left = shift.len;
-    let count = (1 + shift.turn / 3).min(4) as usize;
-    let mut candidates: Vec<usize> = (0..n).filter(|&i| net.incidents[i].is_none() && net.health[i] == Health::Online).collect();
-    for _ in 0..count.min(candidates.len()) {
-        let i = candidates.swap_remove(rng.below(candidates.len()));
-        let failure = roll_failure(&mut rng, &world.nodes[i].kind);
-        let inc = new_incident(&mut rng, failure, now);
-        net.strike(i, inc);
-        shift.say(format!("🚨 {} {} on {}", failure.emoji(), failure.name(), world.nodes[i].name), now);
-    }
-    let banner = format!("— Turn {} · {:.0}s —", shift.turn, shift.len);
-    shift.say(banner, now);
-    net.version += 1;
-}
+            Health::Degraded => 0.04,
+            Health::Down => 0.2,
+        })
+        .sum();
+    shift.sla -= drain * dt;
 
-fn end(shift: &mut Shift, now: f32) {
-    shift.phase = Phase::Over;
-    shift.sla = shift.sla.max(0.0);
-    let avg = if shift.reactions.is_empty() { 0.0 } else { shift.reactions.iter().sum::<f32>() / shift.reactions.len() as f32 };
-    let (turns, fixes, score) = (shift.turn, shift.fixes, shift.score);
-    shift.say(format!("SLA breached. {turns} turns, {fixes} fixes, avg {avg:.1}s, score {score}"), now);
+    // New trouble, more often as the day goes on: reactive incidents and Watchtower forecasts.
+    let p = shift.progress();
+    let free = |net: &Net| -> Vec<usize> { (0..n).filter(|&i| net.alerts[i].is_none() && net.health[i] == Health::Online).collect() };
+    if shift.clock >= shift.next_incident {
+        shift.next_incident = shift.clock + (26.0 - 14.0 * p) * (0.7 + rng.f32() * 0.6);
+        let free = free(&net);
+        if !free.is_empty() {
+            let i = free[rng.below(free.len())];
+            let failure = if is_store(&net.kinds[i]) && rng.f32() < 0.4 {
+                Failure::Disparity
+            } else {
+                [Failure::Ddos, Failure::Worm, Failure::Leak, Failure::Ddos][rng.below(4)]
+            };
+            let alert = incident(&mut rng, failure, shift.clock);
+            net.raise(i, alert);
+            let msg = format!("🚨 {} {} on {}", failure.emoji(), failure.name(), net.names[i]);
+            shift.say(msg);
+        }
+    }
+    if shift.clock >= shift.next_forecast {
+        shift.next_forecast = shift.clock + (30.0 - 14.0 * p) * (0.7 + rng.f32() * 0.6);
+        let free = free(&net);
+        if !free.is_empty() {
+            let i = free[rng.below(free.len())];
+            let failure = if is_store(&net.kinds[i]) && rng.f32() < 0.5 {
+                Failure::DiskFull
+            } else {
+                [Failure::Cert, Failure::BadDeploy, Failure::Worm, Failure::Cert][rng.below(4)]
+            };
+            let alert = forecast(&mut rng, failure, shift.clock);
+            net.raise(i, alert);
+            if net.sighted() {
+                let msg = format!("🔭 forecast for {} in {:.0}s", net.names[i], alert.ttl);
+                shift.say(msg);
+            }
+        }
+    }
+
+    if shift.sla <= 0.0 {
+        shift.sla = 0.0;
+        shift.phase = Phase::Lost;
+        let s = format!("SLA breached at {}. ★ {}  fixes {}  prevented {}", shift.time_of_day(), shift.score, shift.fixes, shift.prevented);
+        shift.say(s);
+        net.touch();
+    } else if shift.clock >= SHIFT_SECS {
+        shift.phase = Phase::Won;
+        let bonus = (shift.sla * 10.0) as u32;
+        shift.score += bonus;
+        let s = format!("17:00, shift survived! SLA bonus +{bonus}. ★ {}", shift.score);
+        shift.say(s);
+        net.touch();
+    }
 }
 
 /// Lightning from a storm cloud knocks out the power of the node it hits.
-fn strikes(mut reader: MessageReader<Strike>, time: Res<Time>, world: Res<World>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut net: ResMut<Net>) {
+fn strikes(mut reader: MessageReader<Strike>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut net: ResMut<Net>) {
     for Strike(at) in reader.read() {
         if shift.phase != Phase::Running {
             continue;
         }
         let Some((i, d)) = net.at.iter().enumerate().map(|(i, p)| (i, p.distance(*at))).min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
-        if d > 110.0 || rng.f32() > 0.6 {
+        if d > 110.0 || rng.f32() > 0.5 {
             continue;
         }
-        let now = time.elapsed_secs();
-        let inc = new_incident(&mut rng, Failure::Surge, now);
-        if net.strike(i, inc) {
-            shift.say(format!("⚡ Lightning hit {}!", world.nodes[i].name), now);
+        let alert = incident(&mut rng, Failure::Surge, shift.clock);
+        if net.raise(i, alert) {
+            let msg = format!("⚡ Lightning hit {}!", net.names[i]);
+            shift.say(msg);
         }
     }
 }
@@ -642,12 +1075,13 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>) {
             position_type: PositionType::Absolute,
             top: px(16),
             left: px(16),
-            max_width: px(420),
-            margin: UiRect::right(px(60)),
+            max_width: px(440),
+            margin: UiRect::right(px(64)),
             flex_direction: FlexDirection::Column,
             row_gap: px(6),
             ..default()
         },
+        GlobalZIndex(40),
         children![
             (
                 Blocks,
@@ -661,7 +1095,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>) {
                     ..default()
                 },
                 BorderColor::all(GREEN_500.with_alpha(0.4)),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.96)),
                 children![
                     (HudText, Text::new("🐵 ON-CALL"), art.text(true, 13.0), TextColor(GREEN_400)),
                     (
@@ -669,6 +1103,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>) {
                         BackgroundColor(GREEN_900.with_alpha(0.6)),
                         children![(HudBar, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GREEN_500))],
                     ),
+                    (MonkeyText, Text::new(""), art.text(false, 11.0), TextColor(GREEN_300)),
                     (
                         StartButton,
                         Interaction::default(),
@@ -685,58 +1120,223 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>) {
                     ),
                 ],
             ),
+            (AlertList, Blocks, Interaction::default(), Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Start, row_gap: px(3), ..default() }),
             (LogText, Text::new(""), art.text(false, 11.0), TextColor(GREEN_300), Node { padding: UiRect::horizontal(px(4)), ..default() }),
         ],
     ));
 }
 
+fn set(texts: &mut Query<&mut Text>, e: Entity, s: String) {
+    if let Ok(mut t) = texts.get_mut(e) {
+        if t.0 != s {
+            t.0 = s;
+        }
+    }
+}
+
 fn hud(
-    time: Res<Time>,
     shift: Res<Shift>,
     net: Res<Net>,
+    monkey: Res<Monkey>,
     mut texts: Query<&mut Text>,
     hud_text: Single<Entity, With<HudText>>,
+    monkey_text: Single<Entity, With<MonkeyText>>,
     log_text: Single<Entity, With<LogText>>,
     start_label: Single<Entity, With<StartLabel>>,
     mut bar: Single<(&mut Node, &mut BackgroundColor), With<HudBar>>,
     mut start_node: Single<&mut Node, (With<StartButton>, Without<HudBar>)>,
 ) {
-    let open = net.incidents.iter().filter(|i| i.is_some()).count();
+    let incidents = net.alerts.iter().flatten().filter(|a| !a.forecast).count();
+    let forecasts = net.alerts.iter().flatten().filter(|a| a.forecast).count();
     let line = match shift.phase {
-        Phase::Idle => "🐵 ON-CALL · keep the jungle network up".to_string(),
+        Phase::Idle => "🐵 ON-CALL · keep the jungle network up until 17:00".to_string(),
         Phase::Running => format!(
-            "TURN {}  ⏱ {:.1}s  SLA {:.0}%  ★ {}  🚨 {}",
-            shift.turn.max(1),
-            shift.left.max(0.0),
+            "🕘 {}  SLA {:.0}%  ★ {}  🚨 {}  🔮 {}",
+            shift.time_of_day(),
             shift.sla.max(0.0),
             shift.score,
-            open
+            incidents,
+            if net.sighted() { forecasts.to_string() } else { "?".into() }
         ),
-        Phase::Over => format!("SHIFT OVER  ★ {}  turns {}  fixes {}", shift.score, shift.turn, shift.fixes),
+        Phase::Won => format!("SHIFT SURVIVED  ★ {}  fixes {}  prevented {}", shift.score, shift.fixes, shift.prevented),
+        Phase::Lost => format!("SLA BREACHED at {}  ★ {}", shift.time_of_day(), shift.score),
     };
-    if let Ok(mut t) = texts.get_mut(*hud_text) {
-        if t.0 != line {
-            t.0 = line;
+    set(&mut texts, *hud_text, line);
+    let status = if shift.phase != Phase::Running {
+        String::new()
+    } else {
+        let here = &net.names[monkey.at];
+        let hiking = if monkey.overland && !monkey.path.is_empty() { ", hiking overland" } else { "" };
+        match (monkey.job, monkey.path.back()) {
+            (Some(j), Some(_)) => {
+                format!("🐒 → {} ({:.0}s{hiking}), then {} {}", net.names[j.node], eta(&net, &monkey, j.node), j.action.emoji(), j.action.label())
+            }
+            (Some(j), None) => format!("🐒 {} {} at {here} · {:.1}s", j.action.emoji(), j.action.label(), j.left.max(0.0)),
+            (None, Some(&dest)) => format!("🐒 → {} ({:.0}s{hiking})", net.names[dest], eta(&net, &monkey, dest)),
+            (None, None) => format!("🐒 at {here}"),
         }
-    }
+    };
+    set(&mut texts, *monkey_text, status);
     let running = shift.phase == Phase::Running;
     start_node.display = if running { Display::None } else { Display::Flex };
-    if let Ok(mut t) = texts.get_mut(*start_label) {
-        let want = if shift.phase == Phase::Over { "AGAIN (Enter)" } else { "START SHIFT (Enter)" };
-        if t.0 != want {
-            t.0 = want.into();
-        }
-    }
+    let want = if matches!(shift.phase, Phase::Won | Phase::Lost) { "NEW SHIFT (Enter)" } else { "START SHIFT (Enter)" };
+    set(&mut texts, *start_label, want.to_string());
     let (node, bg) = &mut *bar;
-    let frac = if running && shift.len > 0.0 { (shift.left / shift.len).clamp(0.0, 1.0) } else { 0.0 };
-    node.width = percent(frac * 100.0);
-    bg.0 = if frac < 0.3 { RED } else { GREEN_500 };
-    let now = time.elapsed_secs();
-    let log: Vec<&str> = shift.log.iter().filter(|(_, at)| now - at < 12.0 || shift.phase == Phase::Over).map(|(s, _)| s.as_str()).collect();
-    let log = log.join("\n");
-    if let Ok(mut t) = texts.get_mut(*log_text) {
-        if t.0 != log {
-            t.0 = log;
+    node.width = percent(shift.progress() * 100.0);
+    bg.0 = if shift.sla < 30.0 { RED } else { GREEN_500 };
+    let log: Vec<&str> = shift.log.iter().filter(|(_, at)| shift.clock - at < 15.0 || !running).map(|(s, _)| s.as_str()).collect();
+    set(&mut texts, *log_text, log.join("\n"));
+}
+
+/// Open alerts, most urgent first, clickable. Rebuilt when the network changes.
+fn alert_list(
+    mut commands: Commands,
+    art: Res<Art>,
+    net: Res<Net>,
+    shift: Res<Shift>,
+    mut seen: ResMut<AlertListVersion>,
+    list: Single<(Entity, Option<&Children>), With<AlertList>>,
+) {
+    if seen.0 == Some(net.version) {
+        return;
+    }
+    seen.0 = Some(net.version);
+    let (root, children) = *list;
+    if let Some(children) = children {
+        for c in children.iter() {
+            commands.entity(c).despawn();
         }
     }
+    if shift.phase != Phase::Running {
+        return;
+    }
+    let sighted = net.sighted();
+    let mut rows: Vec<(usize, Alert)> = net.alerts.iter().enumerate().filter_map(|(i, a)| a.filter(|a| !a.forecast || sighted).map(|a| (i, a))).collect();
+    rows.sort_by(|a, b| a.1.forecast.cmp(&b.1.forecast).then(a.1.ttl.total_cmp(&b.1.ttl)));
+    commands.entity(root).with_children(|list| {
+        if !sighted {
+            list.spawn((
+                Node { padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.93)),
+                children![(Text::new("🔭 Watchtower down: no forecasts"), art.text(true, 11.0), TextColor(AMBER))],
+            ));
+        }
+        for (i, a) in rows.into_iter().take(7) {
+            let (glyph, title, color) = if a.forecast {
+                (a.failure.forecast().map_or("🔮", |f| f.0), "forecast", AMBER)
+            } else {
+                (a.failure.emoji(), a.failure.name(), RED_400)
+            };
+            list.spawn((
+                AlertRow(i),
+                Interaction::default(),
+                Node { column_gap: px(6), align_items: AlignItems::Center, padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.93)),
+            ))
+            .with_children(|r| {
+                r.spawn((PanelTtl(i), Text::new(""), art.text(true, 11.0), TextColor(color), Node { min_width: px(48), ..default() }));
+                r.spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(12.0), ..default() }));
+                r.spawn((Text::new(format!("{title} · {}", net.names[i])), art.text(false, 11.0), TextColor(color)));
+            });
+        }
+    });
+}
+
+/// Countdown texts in the alert list and node panel.
+fn live_ttls(net: Res<Net>, mut q: Query<(&PanelTtl, &mut Text)>) {
+    for (p, mut text) in &mut q {
+        let s = net.alerts.get(p.0).copied().flatten().map_or(String::new(), |a| ttl_text(&a, net.health[p.0]));
+        if text.0 != s {
+            text.0 = s;
+        }
+    }
+}
+
+/// The node panel's top section: the open alert with its fixes (keys 1-4), or a "go here" button.
+pub fn alert_box(body: &mut ChildSpawnerCommands, art: &Art, net: &Net, shift: &Shift, node: usize) {
+    if shift.phase != Phase::Running {
+        return;
+    }
+    let Some(a) = net.alerts[node].filter(|a| !a.forecast || net.sighted()) else {
+        body.spawn((
+            GoButton,
+            Interaction::default(),
+            Node {
+                justify_content: JustifyContent::Center,
+                padding: UiRect::axes(px(8), px(6)),
+                margin: UiRect::bottom(px(10)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(4)),
+                ..default()
+            },
+            BorderColor::all(GREEN_500.with_alpha(0.5)),
+            BackgroundColor(GREEN_900.with_alpha(0.4)),
+            children![(Text::new("🐒 Send the monkey here (G)"), art.text(true, 12.0), TextColor(GREEN_300))],
+        ));
+        return;
+    };
+    let (accent, bg, glyph, title, text) = if a.forecast {
+        let (g, t, _) = a.failure.forecast().unwrap_or(("🔮", "", Action::Patch));
+        (AMBER, Color::srgba(0.3, 0.2, 0.0, 0.5), g, "FORECAST ·".to_string(), t)
+    } else {
+        (RED_400, Color::srgba(0.3, 0.04, 0.04, 0.5), a.failure.emoji(), format!("INCIDENT · {} ·", a.failure.name()), a.failure.symptom())
+    };
+    body.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(8)),
+            margin: UiRect::bottom(px(10)),
+            row_gap: px(6),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(6)),
+            ..default()
+        },
+        BorderColor::all(if a.forecast { AMBER.with_alpha(0.6) } else { RED_500.with_alpha(0.6) }),
+        BackgroundColor(bg),
+    ))
+    .with_children(|b| {
+        b.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
+            r.spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(16.0), ..default() }));
+            r.spawn((Text::new(title), art.text(true, 12.0), TextColor(accent)));
+            r.spawn((PanelTtl(node), Text::new(""), art.text(true, 12.0), TextColor(accent)));
+        });
+        b.spawn((Text::new(text), art.text(false, 11.0), TextColor(Color::srgb(1.0, 0.9, 0.85))));
+        for (i, action) in a.options.iter().enumerate() {
+            let tried = a.tried & (1 << i) != 0;
+            let queued = net.queued == Some((node, i));
+            let fg = if tried {
+                Color::srgb(0.45, 0.45, 0.45)
+            } else if queued {
+                AMBER
+            } else {
+                GREEN_300
+            };
+            b.spawn((
+                ActionButton(i),
+                Interaction::default(),
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    padding: UiRect::axes(px(8), px(6)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(4)),
+                    ..default()
+                },
+                BorderColor::all(if tried {
+                    Color::srgba(0.4, 0.4, 0.4, 0.4)
+                } else if queued {
+                    AMBER
+                } else {
+                    GREEN_500.with_alpha(0.5)
+                }),
+                BackgroundColor(if tried { Color::NONE } else { GREEN_900.with_alpha(0.4) }),
+            ))
+            .with_children(|r| {
+                r.spawn((Text::new(format!("{}", i + 1)), art.text(true, 12.0), TextColor(fg)));
+                r.spawn((Text::new(action.emoji()), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(14.0), ..default() }));
+                let suffix = if queued { " · 🐒 on it" } else { "" };
+                r.spawn((Text::new(format!("{} · {:.0}s{suffix}", action.label(), action.secs())), art.text(false, 12.0), TextColor(fg)));
+            });
+        }
+    });
 }

@@ -39,6 +39,8 @@ struct WorldFile {
     tiles: Vec<TileIn>,
     nodes: Vec<NodeData>,
     decorations: Vec<Deco>,
+    #[serde(default)]
+    streams: Vec<Vec<Pos>>,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +112,8 @@ impl Tile {
 pub struct World {
     pub tiles: HashMap<(i32, i32), Tile>,
     pub nodes: Vec<NodeData>,
+    /// River centrelines, upstream first (the main river, the Digital River).
+    pub streams: Vec<Vec<Pos>>,
     /// Screen-space bounds of the whole map (Bevy coordinates, y up).
     pub bounds: Rect,
 }
@@ -213,7 +217,7 @@ pub fn plugin(app: &mut App) {
         let p = iso(x as f32, y as f32, t.height);
         bounds = bounds.union_point(p + Vec2::new(-TILE_W, TILE_H)).union_point(p + Vec2::new(TILE_W, -TILE_H - BASE * ELEV));
     }
-    app.insert_resource(World { tiles, nodes: file.nodes, bounds });
+    app.insert_resource(World { tiles, nodes: file.nodes, streams: file.streams, bounds });
     let mut decorations = file.decorations;
     decorations.extend(bank_decos);
     app.insert_resource(Decos(decorations));
@@ -436,6 +440,13 @@ pub fn node_color(kind: &str) -> Color {
         "switch" => 0x14b8a6,
         "terminal" => 0x64748b,
         "lizard" => 0x84cc16,
+        "lake" => 0x0284c7,
+        "dns" => 0xb91c1c,
+        "balancer" => 0xdb2777,
+        "queue" => 0x0891b2,
+        "monitor" => 0xd97706,
+        "auth" => 0x7c3aed,
+        "cdn" => 0x059669,
         _ => 0x6b7280,
     };
     Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)

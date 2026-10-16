@@ -19,6 +19,40 @@ struct Bubble {
     size: f32,
 }
 
+/// A data frame floating down a river centreline.
+#[derive(Component)]
+struct RiverFrame {
+    stream: usize,
+    offset: f32,
+}
+
+/// A river centreline in screen space, with the grid position of each point (for depth).
+struct Line {
+    screen: Vec<Vec2>,
+    grid: Vec<Vec2>,
+    /// Cumulative length at each point.
+    dist: Vec<f32>,
+}
+
+impl Line {
+    fn len(&self) -> f32 {
+        *self.dist.last().unwrap_or(&0.0)
+    }
+    /// Screen point and grid point `s` px along the line.
+    fn at(&self, s: f32) -> (Vec2, Vec2) {
+        let i = self.dist.partition_point(|d| *d <= s).clamp(1, self.dist.len() - 1);
+        let span = (self.dist[i] - self.dist[i - 1]).max(0.001);
+        let k = ((s - self.dist[i - 1]) / span).clamp(0.0, 1.0);
+        (self.screen[i - 1].lerp(self.screen[i], k), self.grid[i - 1].lerp(self.grid[i], k))
+    }
+}
+
+#[derive(Resource)]
+struct Streams(Vec<Line>);
+
+const FRAME_GAP: f32 = 46.0;
+const FRAME_SPEED: f32 = 38.0;
+
 #[derive(Component)]
 struct Glint {
     phase: f32,
@@ -26,10 +60,34 @@ struct Glint {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, spawn).add_systems(Update, animate);
+    app.add_systems(Startup, spawn).add_systems(Update, (animate, flow));
 }
 
 fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>) {
+    // The rivers are digital: a steady stream of frames rides each centreline downstream.
+    let mut lines = Vec::new();
+    for (si, stream) in world.streams.iter().enumerate() {
+        let grid: Vec<Vec2> = stream.iter().map(|p| Vec2::new(p.x, p.y)).collect();
+        let screen: Vec<Vec2> = stream.iter().map(|p| iso(p.x, p.y, world.ground(p.x, p.y).max(p.height))).collect();
+        let mut dist = vec![0.0];
+        for w in screen.windows(2) {
+            dist.push(dist.last().unwrap() + w[0].distance(w[1]));
+        }
+        let line = Line { screen, grid, dist };
+        if line.screen.len() < 2 {
+            continue;
+        }
+        for i in 0..(line.len() / FRAME_GAP) as usize {
+            commands.spawn((
+                RiverFrame { stream: si, offset: i as f32 * FRAME_GAP + cell_hash(i as i32, si as i32) * 12.0 },
+                Sprite { image: art.frame.clone(), color: Color::srgba(0.75, 0.95, 1.0, 0.0), custom_size: Some(Vec2::new(14.0, 8.0)), ..default() },
+                Transform::default(),
+            ));
+        }
+        lines.push(line);
+    }
+    commands.insert_resource(Streams(lines));
+
     for (&(x, y), t) in world.tiles.iter().filter(|(_, t)| t.kind == kind::WATER) {
         let c = iso(x as f32, y as f32, t.height);
         let z = row_z(x as f32, y as f32) - 0.2;
@@ -92,5 +150,20 @@ fn animate(
         let k = (t / g.period + g.phase).fract();
         let a = (1.0 - ((k - 0.5).abs() * 6.0)).max(0.0);
         sprite.color = sprite.color.with_alpha(a * 0.45);
+    }
+}
+
+fn flow(time: Res<Time>, streams: Res<Streams>, mut frames: Query<(&RiverFrame, &mut Transform, &mut Sprite)>) {
+    let t = time.elapsed_secs();
+    for (f, mut tf, mut sprite) in &mut frames {
+        let Some(line) = streams.0.get(f.stream) else { continue };
+        let len = line.len();
+        let s = (f.offset + t * FRAME_SPEED).rem_euclid(len);
+        let (p, g) = line.at(s);
+        let bob = (t * 2.5 + f.offset).sin() * 1.5;
+        tf.translation = (p + Vec2::new(0.0, 6.0 + bob)).extend(g.x.round() + g.y.round() + 0.3);
+        // Fade in at the source and out at the mouth.
+        let edge = (s / 60.0).min((len - s) / 60.0).clamp(0.0, 1.0);
+        sprite.color = sprite.color.with_alpha(0.85 * edge);
     }
 }

@@ -56,6 +56,19 @@ export interface WorldData {
   }[]
 }
 
+// Centrelines the data frames float down (filled by generateRiverSystem)
+const MAIN_RIVER_LINE: Position[] = []
+
+// Where the Digital River ends
+const DATA_LAKE = { x: 11, y: 38 }
+
+// Digital River, continued: leaves the small lagoon (7,12), runs down the west edge, bends into the Data Lake
+const DIGITAL_RIVER_BRANCH: Position[] = [
+  { x: 7, y: 15 }, { x: 6, y: 16 }, { x: 5, y: 17 }, { x: 4, y: 18 }, { x: 3, y: 19 }, { x: 2, y: 20 },
+  ...Array.from({ length: 15 }, (_, i) => ({ x: 1, y: 21 + i })),
+  { x: 2, y: 36 }, { x: 3, y: 37 }, { x: 4, y: 38 }, { x: 5, y: 38 }, { x: 6, y: 38 }, { x: 7, y: 38 }, { x: 8, y: 38 },
+].map((p) => ({ ...p, height: 0 }))
+
 // Update river generation to ensure it flows from top to bottom with proper features
 function generateRiverSystem(): Position[] {
   const riverPositions: Position[] = []
@@ -129,6 +142,8 @@ function generateRiverSystem(): Position[] {
     { x: 28, y: 44, height: 0 },
     { x: 28, y: 45, height: 0 },
   ]
+
+  MAIN_RIVER_LINE.splice(0, MAIN_RIVER_LINE.length, ...riverPath)
 
   // Add the main river path
   riverPath.forEach((point) => {
@@ -214,6 +229,18 @@ function generateRiverSystem(): Position[] {
   smallLagoonConnection.forEach((point) => {
     riverPositions.push(point)
   })
+
+  // The Digital River continues past its lagoon: down the west edge into the Data Lake
+  DIGITAL_RIVER_BRANCH.forEach((point) => {
+    riverPositions.push(point, { ...point, x: point.x - 1 }, { ...point, x: point.x + 1 })
+  })
+  for (let dx = -3; dx <= 3; dx++) {
+    for (let dy = -3; dy <= 3; dy++) {
+      if (Math.hypot(dx, dy) <= 3.2) {
+        riverPositions.push({ x: DATA_LAKE.x + dx, y: DATA_LAKE.y + dy, height: 0, isLagoon: true })
+      }
+    }
+  }
 
   // Remove duplicates
   const uniquePositions = new Map<string, Position>()
@@ -598,7 +625,7 @@ const allNodes: NodeData[] = [
     emoji: "⚛️",
     description:
       "Experimental quantum computing node that exists in multiple states simultaneously. Calculations performed here may have different results each time they're observed.",
-    position: { x: 8, y: 27, height: 2 },
+    position: { x: 10, y: 31, height: 2 }, // moved off Crashed Sector (they overlapped)
     connections: ["node-temple-1"],
     status: "unstable",
     securityLevel: 5,
@@ -631,11 +658,103 @@ const allNodes: NodeData[] = [
     emoji: "🦎",
     description:
       "Cold-blooded system monitor that conserves energy while maintaining vigilance. Specializes in detecting anomalies in data patterns.",
-    position: { x: 14, y: 14, height: 0 },
+    position: { x: 13, y: 12, height: 0 }, // basks on the Digital River channel, clear of the Guardian
     connections: ["monkey-statue", "digital-river"],
     status: "online",
     securityLevel: 3,
     assets: ["cold_blood.bin", "scale_pattern.dat", "sun_basking.sys"],
+  },
+  // Second wave of places: the jungle's supporting infrastructure
+  {
+    id: "data-lake",
+    name: "Data Lake",
+    type: "lake",
+    ipAddress: "10.4.0.1",
+    emoji: "🏞️",
+    description: "Where the Digital River ends. Every frame that ever flowed downstream settles here, replicated three ways and rarely read.",
+    position: { x: 11, y: 38, height: 0 },
+    connections: ["digital-river", "terminal-01", "firewall-south"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["lake_manifest.json", "replica_a.dat", "replica_b.dat", "replica_c.dat"],
+  },
+  {
+    id: "dns-shrine",
+    name: "DNS Shrine",
+    type: "dns",
+    ipAddress: "10.0.0.53",
+    emoji: "⛩️",
+    description: "Monks chant names into numbers. When the shrine forgets, nobody in the jungle can find anybody else.",
+    position: { x: 12, y: 20, height: 0 },
+    connections: ["monkey-statue", "node-temple-1", "lizard-node", "main-router"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["zonefile.txt", "resolver.sys", "ttl_prayers.log"],
+  },
+  {
+    id: "lb-lilypads",
+    name: "Lilypad Load Balancer",
+    type: "balancer",
+    ipAddress: "10.1.0.10",
+    emoji: "🪷",
+    description: "Frames hop from pad to pad across the river; the pads take turns so no single one sinks.",
+    position: { x: 20, y: 25, height: 0 },
+    connections: ["main-router", "switch-01", "banana-sector", "cdn-canopy"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["pool_members.json", "health_checks.log"],
+  },
+  {
+    id: "mq-falls",
+    name: "Message Queue Falls",
+    type: "queue",
+    ipAddress: "10.2.0.5",
+    emoji: "📨",
+    description: "Messages wait in the pool at the top of the waterfall and drop one at a time, in order. Usually.",
+    position: { x: 24, y: 3, height: 2 },
+    connections: ["logical-lagoon", "firewall-north", "node-temple-2"],
+    status: "online",
+    securityLevel: 3,
+    assets: ["queue_depth.dat", "dead_letters.log", "consumers.json"],
+  },
+  {
+    id: "watchtower",
+    name: "Canopy Watchtower",
+    type: "monitor",
+    ipAddress: "10.9.0.1",
+    emoji: "🔭",
+    description: "Monitoring. Sees trouble coming: expiring certs, scheduled deploys, filling disks. If it goes dark, so do your forecasts.",
+    position: { x: 31, y: 31, height: 1 },
+    connections: ["main-router", "banana-sector", "database-cluster"],
+    status: "online",
+    securityLevel: 4,
+    assets: ["dashboards.json", "alert_rules.yml", "pager.log"],
+  },
+  {
+    id: "auth-gate",
+    name: "Auth Gate",
+    type: "auth",
+    ipAddress: "10.3.0.1",
+    emoji: "🛂",
+    description: "Checks every monkey's papers. Holds the certificates the rest of the jungle trusts.",
+    position: { x: 30, y: 21, height: 0 },
+    connections: ["vault-01", "ai-core-01", "banana-cache-01", "main-router"],
+    status: "online",
+    securityLevel: 5,
+    assets: ["ca_bundle.pem", "sessions.dat", "policy.json"],
+  },
+  {
+    id: "cdn-canopy",
+    name: "CDN Canopy",
+    type: "cdn",
+    ipAddress: "10.5.0.1",
+    emoji: "🌐",
+    description: "Copies of popular bananas cached high in the treetops at the river delta, close to every visitor.",
+    position: { x: 28, y: 41, height: 0 },
+    connections: ["lb-lilypads", "switch-01", "terminal-01"],
+    status: "online",
+    securityLevel: 2,
+    assets: ["edge_cache.bin", "purge_requests.log"],
   },
 ]
 
@@ -807,6 +926,12 @@ function generateMinimalChunks(): ChunkData[] {
 
 // Define floating clouds
 // Generate world data
+export const riverLines = {
+  main: MAIN_RIVER_LINE,
+  // From the main river west along the channel to the small lagoon, then down the new branch
+  digital: [...Array.from({ length: 17 }, (_, i) => ({ x: 23 - i, y: 12, height: 0 })), ...DIGITAL_RIVER_BRANCH],
+}
+
 export const worldData: WorldData = {
   meta: {
     seed: WORLD_SEED,

@@ -37,6 +37,11 @@ pub struct Art {
     pub card_border: Handle<Image>,
     /// Soft white dot: bubbles, glints, packets.
     pub dot: Handle<Image>,
+    /// A data frame: outlined box with a header bar (tinted per use).
+    pub frame: Handle<Image>,
+    /// A full-radius pill (cloud body) and its 1px-at-1x outline.
+    pub pill: Handle<Image>,
+    pub pill_border: Handle<Image>,
     pub grid: Handle<Image>,
 }
 
@@ -94,6 +99,44 @@ fn dot(images: &mut Assets<Image>) -> Handle<Image> {
     images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
 }
 
+fn frame(images: &mut Assets<Image>) -> Handle<Image> {
+    const W: u32 = 24;
+    const H: u32 = 14;
+    let mut data = Vec::with_capacity((W * H * 4) as usize);
+    for y in 0..H {
+        for x in 0..W {
+            let edge = x == 0 || y == 0 || x == W - 1 || y == H - 1;
+            let header = y < 4;
+            // Two "payload" lines in the body.
+            let payload = (y == 7 && (3..W - 5).contains(&x)) || (y == 10 && (3..W - 9).contains(&x));
+            let a: u8 = if edge || header { 255 } else if payload { 200 } else { 70 };
+            data.extend([255, 255, 255, a]);
+        }
+    }
+    let size = Extent3d { width: W, height: H, depth_or_array_layers: 1 };
+    images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
+}
+
+/// Pill at 2x (320x150): solid, or just its outline. Edges are anti-aliased.
+fn pill(images: &mut Assets<Image>, outline: bool) -> Handle<Image> {
+    const W: u32 = 320;
+    const H: u32 = 150;
+    let r = H as f32 / 2.0;
+    let mut data = Vec::with_capacity((W * H * 4) as usize);
+    for y in 0..H {
+        for x in 0..W {
+            let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+            // Distance from the pill's centre segment, minus the radius = signed edge distance.
+            let cx = p.x.clamp(r, W as f32 - r);
+            let d = p.distance(Vec2::new(cx, r)) - (r - 1.0);
+            let a = if outline { (1.5 - (d + 1.5).abs()).clamp(0.0, 1.0) } else { (0.5 - d).clamp(0.0, 1.0) };
+            data.extend([255, 255, 255, (a * 255.0) as u8]);
+        }
+    }
+    let size = Extent3d { width: W, height: H, depth_or_array_layers: 1 };
+    images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
+}
+
 fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts: ResMut<Assets<Font>>) {
     let font = |b: &[u8]| Font::from_bytes(b.to_vec());
     commands.insert_resource(Art {
@@ -105,6 +148,9 @@ fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts
         card: png(&mut images, include_bytes!("../assets/card.png"), ImageSampler::linear()),
         card_border: png(&mut images, include_bytes!("../assets/card_border.png"), ImageSampler::linear()),
         dot: dot(&mut images),
+        frame: frame(&mut images),
+        pill: pill(&mut images, false),
+        pill_border: pill(&mut images, true),
         grid: png(&mut images, include_bytes!("../../public/images/grid_background.png"), ImageSampler::linear()),
     });
 }
@@ -117,6 +163,8 @@ fn main() {
                 canvas: Some("#lm-canvas".into()),
                 fit_canvas_to_parent: true,
                 prevent_default_event_handling: true,
+                // An alpha canvas lets the page (and stale frames) show through translucent UI.
+                composite_alpha_mode: bevy::window::CompositeAlphaMode::Opaque,
                 ..default()
             }),
             ..default()

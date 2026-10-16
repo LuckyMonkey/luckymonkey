@@ -1,15 +1,19 @@
-//! Clouds are the original floating "divs": translucent pills with a rounded
-//! border and a cloud emoji inside. They drift across the map on one wind and
-//! wrap; rain clouds drizzle, storm clouds flash yellow and drop a ⚡ - and in a
-//! shift, a strike on a node knocks its power out (see `ops`).
+//! Clouds look like the original floating "divs": translucent pills with a
+//! rounded 1px border and a cloud emoji inside. They drift across the map on one
+//! wind and wrap; rain clouds drizzle, storm clouds flash yellow and drop a ⚡ -
+//! and in a shift, a strike on a node knocks its power out (see `ops`).
+//!
+//! They are world sprites (not UI nodes): UI box shadows broke the stacking and
+//! blending of the HUD, and as sprites they pan and zoom with the map for free.
 
 use bevy::prelude::*;
 
-use crate::view::ViewState;
-use crate::world::World;
+use crate::world::{emoji_text, World};
 use crate::{Art, Rng};
 
 const COUNT: usize = 10;
+const CLOUD_Z: f32 = 300.0;
+const FLASH_SECS: f32 = 0.6;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Weather {
@@ -25,25 +29,25 @@ pub struct Strike(pub Vec2);
 #[derive(Component)]
 struct Cloud {
     weather: Weather,
-    /// World-space centre.
-    pos: Vec2,
     speed: f32,
-    /// Size at 100% zoom (the old small/medium/large divs).
-    size: Vec2,
-    emoji_px: f32,
     next_flash: f32,
     /// Seconds into the current flash, if one is running.
     flash: Option<f32>,
-    emoji: Entity,
-    bolt: Option<Entity>,
 }
 
+/// Parts of a cloud that change during a flash.
+#[derive(Component)]
+struct Fill;
+#[derive(Component)]
+struct Glow;
+#[derive(Component)]
+struct Bolt;
 #[derive(Component)]
 struct Drop {
     phase: f32,
+    /// Bottom edge of the pill, local y.
+    top: f32,
 }
-
-const FLASH_SECS: f32 = 0.6;
 
 pub fn plugin(app: &mut App) {
     app.add_message::<Strike>().add_systems(Startup, spawn).add_systems(Update, (drift, rain, storm));
@@ -70,9 +74,7 @@ fn border(w: Weather) -> Color {
     }
 }
 
-fn glow(color: Color, blur: f32) -> BoxShadow {
-    BoxShadow(vec![ShadowStyle { color, x_offset: Val::ZERO, y_offset: Val::ZERO, spread_radius: Val::ZERO, blur_radius: px(blur) }])
-}
+const GLOW: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
 
 fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>, mut rng: ResMut<Rng>) {
     let b = world.bounds;
@@ -82,6 +84,7 @@ fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>, mut rng: ResM
             1 => Weather::Rain,
             _ => Weather::Storm,
         };
+        // The old small / medium / large divs.
         let (size, emoji_px) = [(Vec2::new(80.0, 40.0), 24.0), (Vec2::new(120.0, 55.0), 30.0), (Vec2::new(160.0, 75.0), 36.0)][rng.below(3)];
         let glyph = match weather {
             Weather::Fair => "☁️",
@@ -89,83 +92,43 @@ fn spawn(mut commands: Commands, world: Res<World>, art: Res<Art>, mut rng: ResM
             Weather::Storm => "⛈️",
         };
         let pos = Vec2::new(b.min.x + rng.f32() * b.width(), b.min.y + rng.f32() * b.height());
-        let emoji = commands
-            .spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(emoji_px), ..default() }, TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9))))
-            .id();
-        let bolt = (weather == Weather::Storm).then(|| {
-            commands
-                .spawn((
-                    Text::new("⚡"),
-                    TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(30.0), ..default() },
-                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
-                    Node { position_type: PositionType::Absolute, bottom: px(-30), ..default() },
-                ))
-                .id()
-        });
-        let mut root = commands.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                width: px(size.x),
-                height: px(size.y),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::MAX,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(fill(weather)),
-            BorderColor::all(border(weather)),
-            glow(Color::srgba(1.0, 1.0, 1.0, 0.1), 20.0),
-            GlobalZIndex(-10),
-            Visibility::Hidden,
-        ));
-        root.add_child(emoji);
-        if let Some(bolt) = bolt {
-            root.add_child(bolt);
-        }
-        if weather == Weather::Rain {
-            root.with_children(|c| {
-                c.spawn(Node { position_type: PositionType::Absolute, top: percent(100), width: percent(100), height: px(25), overflow: Overflow::clip(), ..default() })
-                    .with_children(|r| {
-                        for d in 0..5 {
-                            r.spawn((
-                                Drop { phase: d as f32 * 0.15 },
-                                Node { position_type: PositionType::Absolute, left: percent(15 + d * 18), width: px(2), height: px(16), border_radius: BorderRadius::MAX, ..default() },
-                                BackgroundColor(Color::srgba(0.576, 0.773, 0.992, 0.0)),
-                            ));
-                        }
-                    });
+        commands
+            .spawn((
+                Cloud { weather, speed: 10.0 + rng.f32() * 14.0, next_flash: 2.0 + rng.f32() * 6.0, flash: None },
+                Transform::from_translation(pos.extend(CLOUD_Z + i as f32 * 0.5)),
+                Visibility::Inherited,
+            ))
+            .with_children(|c| {
+                c.spawn((Glow, Sprite { image: art.dot.clone(), color: GLOW, custom_size: Some(size + Vec2::splat(40.0)), ..default() }, Transform::from_xyz(0.0, 0.0, -0.02)));
+                c.spawn((Fill, Sprite { image: art.pill.clone(), color: fill(weather), custom_size: Some(size), ..default() }, Transform::from_xyz(0.0, 0.0, -0.01)));
+                c.spawn((Sprite { image: art.pill_border.clone(), color: border(weather), custom_size: Some(size), ..default() }, Transform::default()));
+                c.spawn((emoji_text(&art, glyph, emoji_px), TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)), Transform::from_xyz(0.0, 0.0, 0.01).with_scale(Vec3::splat(0.5))));
+                if weather == Weather::Storm {
+                    c.spawn((
+                        Bolt,
+                        emoji_text(&art, "⚡", 30.0),
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
+                        Transform::from_xyz(0.0, -size.y / 2.0 - 16.0, 0.01).with_scale(Vec3::splat(0.5)),
+                    ));
+                }
+                if weather == Weather::Rain {
+                    for d in 0..5 {
+                        c.spawn((
+                            Drop { phase: d as f32 * 0.15, top: -size.y / 2.0 },
+                            Sprite::from_color(Color::srgba(0.576, 0.773, 0.992, 0.0), Vec2::new(2.0, 16.0)),
+                            Transform::from_xyz(size.x * (-0.35 + d as f32 * 0.18), -size.y / 2.0, -0.01),
+                        ));
+                    }
+                }
             });
-        }
-        root.insert(Cloud {
-            weather,
-            pos,
-            speed: 10.0 + rng.f32() * 14.0,
-            size,
-            emoji_px,
-            next_flash: 2.0 + rng.f32() * 6.0,
-            flash: None,
-            emoji,
-            bolt,
-        });
     }
 }
 
-/// Move on the wind, then pin each div over its world position for the current camera.
-fn drift(
-    time: Res<Time>,
-    world: Res<World>,
-    view: Res<ViewState>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    mut clouds: Query<(&mut Cloud, &mut Node, &mut Visibility)>,
-    mut fonts: Query<&mut TextFont>,
-) {
+fn drift(time: Res<Time>, world: Res<World>, mut clouds: Query<(&Cloud, &mut Transform)>) {
     let b = world.bounds;
     let margin = 300.0;
-    let (cam, cam_tf) = *camera;
-    let z = view.zoom;
-    for (mut cloud, mut node, mut vis) in &mut clouds {
-        let mut p = cloud.pos + wind() * cloud.speed * time.delta_secs();
+    for (cloud, mut tf) in &mut clouds {
+        let mut p = tf.translation.truncate() + wind() * cloud.speed * time.delta_secs();
         // Wrap so the sky never empties: leave on the right/bottom, return on the left/top.
         if p.x > b.max.x + margin {
             p.x = b.min.x - margin;
@@ -173,33 +136,18 @@ fn drift(
         if p.y < b.min.y - margin {
             p.y = b.max.y + margin;
         }
-        cloud.pos = p;
-        let Ok(screen) = cam.world_to_viewport(cam_tf, p.extend(0.0)) else { continue };
-        let size = cloud.size * z;
-        node.left = px(screen.x - size.x / 2.0);
-        node.top = px(screen.y - size.y / 2.0);
-        if view.is_changed() || *vis == Visibility::Hidden {
-            node.width = px(size.x);
-            node.height = px(size.y);
-            if let Ok(mut f) = fonts.get_mut(cloud.emoji) {
-                f.font_size = FontSize::Px(cloud.emoji_px * z);
-            }
-            if let Some(Ok(mut f)) = cloud.bolt.map(|e| fonts.get_mut(e)) {
-                f.font_size = FontSize::Px(30.0 * z);
-            }
-        }
-        *vis = Visibility::Inherited;
+        tf.translation = p.extend(tf.translation.z);
     }
 }
 
-fn rain(time: Res<Time>, mut drops: Query<(&Drop, &mut Node, &mut BackgroundColor)>) {
+fn rain(time: Res<Time>, mut drops: Query<(&Drop, &mut Transform, &mut Sprite)>) {
     let t = time.elapsed_secs();
-    for (drop, mut node, mut bg) in &mut drops {
+    for (drop, mut tf, mut sprite) in &mut drops {
         // The old `rain-drop` keyframes: fall 25 px, fade in by 30%, out by the end.
         let k = (t + drop.phase).fract();
-        node.top = px(-5.0 + k * 25.0);
+        tf.translation.y = drop.top - 8.0 - k * 25.0;
         let a = if k < 0.3 { k / 0.3 * 0.8 } else { 0.8 * (1.0 - k) / 0.7 };
-        bg.0 = bg.0.with_alpha(a * 0.6);
+        sprite.color = sprite.color.with_alpha(a * 0.6);
     }
 }
 
@@ -207,11 +155,13 @@ fn storm(
     time: Res<Time>,
     mut rng: ResMut<Rng>,
     mut strikes: MessageWriter<Strike>,
-    mut clouds: Query<(&mut Cloud, &mut BackgroundColor, &mut BoxShadow)>,
-    mut colors: Query<&mut TextColor>,
+    mut clouds: Query<(&mut Cloud, &Transform, &Children)>,
+    mut fills: Query<&mut Sprite, (With<Fill>, Without<Glow>)>,
+    mut glows: Query<&mut Sprite, (With<Glow>, Without<Fill>)>,
+    mut bolts: Query<&mut TextColor, With<Bolt>>,
 ) {
     let dt = time.delta_secs();
-    for (mut cloud, mut bg, mut shadow) in &mut clouds {
+    for (mut cloud, tf, children) in &mut clouds {
         if cloud.weather != Weather::Storm {
             continue;
         }
@@ -220,13 +170,12 @@ fn storm(
             cloud.flash = Some(0.0);
             cloud.next_flash = 4.0 + rng.f32() * 5.0;
         }
-        // Ramp up, hold, ramp down: the div itself lights up yellow and glows.
+        // Ramp up, hold, ramp down: the pill itself lights up yellow and glows.
         let lit = match cloud.flash {
-            Some(f) => {
-                let before = f;
-                let f = f + dt;
+            Some(before) => {
+                let f = before + dt;
                 if before < FLASH_SECS / 2.0 && f >= FLASH_SECS / 2.0 {
-                    strikes.write(Strike(cloud.pos + Vec2::Y * -60.0));
+                    strikes.write(Strike(tf.translation.truncate() - Vec2::Y * 60.0));
                 }
                 cloud.flash = (f < FLASH_SECS).then_some(f);
                 (1.0 - ((f / FLASH_SECS - 0.5).abs() * 2.0 - 0.34).max(0.0) / 0.66).clamp(0.0, 1.0)
@@ -234,18 +183,16 @@ fn storm(
             None => 0.0,
         };
         let gray = fill(Weather::Storm).to_srgba();
-        let yellow = Srgba::new(0.992, 0.878, 0.278, 0.5);
-        bg.0 = Color::Srgba(gray.mix(&yellow, lit));
-        *shadow = if lit > 0.0 {
-            BoxShadow(vec![
-                ShadowStyle { color: Color::srgba(0.98, 0.8, 0.08, 0.7 * lit), x_offset: Val::ZERO, y_offset: Val::ZERO, spread_radius: Val::ZERO, blur_radius: px(40) },
-                ShadowStyle { color: Color::srgba(0.98, 0.8, 0.08, 0.3 * lit), x_offset: Val::ZERO, y_offset: Val::ZERO, spread_radius: Val::ZERO, blur_radius: px(80) },
-            ])
-        } else {
-            glow(Color::srgba(1.0, 1.0, 1.0, 0.1), 20.0)
-        };
-        if let Some(Ok(mut c)) = cloud.bolt.map(|e| colors.get_mut(e)) {
-            c.0 = c.0.with_alpha(lit);
+        for c in children.iter() {
+            if let Ok(mut s) = fills.get_mut(c) {
+                s.color = Color::Srgba(gray.mix(&Srgba::new(0.992, 0.878, 0.278, 0.5), lit));
+            }
+            if let Ok(mut s) = glows.get_mut(c) {
+                s.color = Color::Srgba(GLOW.to_srgba().mix(&Srgba::new(0.98, 0.8, 0.08, 0.7), lit));
+            }
+            if let Ok(mut b) = bolts.get_mut(c) {
+                b.0 = b.0.with_alpha(lit);
+            }
         }
     }
 }

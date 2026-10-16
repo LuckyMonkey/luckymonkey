@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::ops::{ActionButton, Net};
+use crate::ops::{Net, Shift};
 use crate::view::{PointerOverUi, ViewState, ZoomBy};
 use crate::world::World;
 use crate::{Art, Screen};
@@ -252,7 +252,7 @@ fn hud_button(art: &Art, text: &str) -> impl Bundle {
             ..default()
         },
         BorderColor::all(GREEN_500.with_alpha(0.5)),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.95)),
         children![label(art, text, 18.0, GREEN_400)],
     )
 }
@@ -260,18 +260,19 @@ fn hud_button(art: &Art, text: &str) -> impl Bundle {
 fn spawn_hud(mut commands: Commands, art: Res<Art>, windows: Query<&Window>) {
     commands.spawn((
         Node { position_type: PositionType::Absolute, top: px(16), right: px(16), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(8), ..default() },
+        GlobalZIndex(40),
         children![
             (hud_button(&art, "+"), ZoomButton(1.2)),
             (
                 Node { padding: UiRect::axes(px(5), px(2)), border_radius: BorderRadius::all(px(4)), ..default() },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.95)),
                 children![(ZoomLabel, label(&art, "100%", 12.0, GREEN_400))],
             ),
             (hud_button(&art, "−"), ZoomButton(1.0 / 1.2)),
         ],
     ));
     let touch = windows.iter().next().is_some_and(|w| w.width() < 768.0);
-    let hint = if touch { "Drag to pan · pinch to zoom · tap nodes to inspect" } else { "Drag to pan · scroll to zoom · click nodes to inspect" };
+    let hint = if touch { "Drag to pan · pinch to zoom · tap a node, pick a fix" } else { "Drag/scroll: pan & zoom · click a node · Space: next alert · 1-4: fix · G: go · F: find 🐒" };
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -283,7 +284,8 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, windows: Query<&Window>) {
             ..default()
         },
         BorderColor::all(GREEN_500.with_alpha(0.3)),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.92)),
+        GlobalZIndex(40),
         children![label(&art, hint, 11.0, GREEN_400)],
     ));
 }
@@ -356,8 +358,10 @@ fn panel(
     world: Res<World>,
     view: Res<ViewState>,
     net: Res<Net>,
+    shift: Res<Shift>,
     mut state: ResMut<PanelState>,
     roots: Query<Entity, With<PanelRoot>>,
+    windows: Query<&Window>,
 ) {
     if state.shown == view.selected && !state.dirty && state.net_version == net.version {
         return;
@@ -374,7 +378,7 @@ fn panel(
     let Some(index) = view.selected.filter(|&i| i < world.nodes.len()) else { return };
     let node = &world.nodes[index];
     let tab = state.tab;
-    let incident = net.incidents[index];
+    let wide = windows.iter().next().is_some_and(|w| w.width() >= 900.0);
 
     commands
         .spawn((
@@ -384,16 +388,17 @@ fn panel(
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(40),
-                left: px(16),
+                // Wide screens: hug the right edge (the left is the shift HUD and alert list).
+                left: if wide { Val::Auto } else { px(16) },
                 right: px(16),
-                max_width: px(384),
+                width: if wide { px(384) } else { Val::Auto },
                 flex_direction: FlexDirection::Column,
                 border: UiRect::all(px(1)),
                 border_radius: BorderRadius::all(px(12)),
                 ..default()
             },
             BorderColor::all(GREEN_500.with_alpha(0.3)),
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.97)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.995)),
             GlobalZIndex(50),
         ))
         .with_children(|p| {
@@ -425,9 +430,7 @@ fn panel(
             });
             p.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), ..default() }).with_children(|body| match tab {
                 Tab::Info => {
-                    if let Some(inc) = incident {
-                        incident_box(body, &art, inc);
-                    }
+                    crate::ops::alert_box(body, &art, &net, &shift, index);
                     let desc = if node.description.is_empty() { "No description available." } else { &node.description };
                     body.spawn(label(&art, desc, 12.0, GREEN_300));
                     let status = net.health[index].label();
@@ -499,49 +502,3 @@ fn panel(
         });
 }
 
-/// The open incident on the selected node: what's wrong and the four candidate fixes (keys 1-4).
-fn incident_box(body: &mut ChildSpawnerCommands, art: &Art, inc: crate::ops::Incident) {
-    body.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(px(8)),
-            margin: UiRect::bottom(px(10)),
-            row_gap: px(6),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(6)),
-            ..default()
-        },
-        BorderColor::all(RED_500.with_alpha(0.6)),
-        BackgroundColor(Color::srgba(0.3, 0.04, 0.04, 0.5)),
-    ))
-    .with_children(|b| {
-        b.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
-            r.spawn(emoji(art, inc.failure.emoji(), 16.0));
-            r.spawn(bold(art, format!("INCIDENT · {}", inc.failure.name()), 12.0, RED_400));
-        });
-        b.spawn(label(art, inc.failure.symptom(), 11.0, Color::srgb(1.0, 0.85, 0.85)));
-        for (i, action) in inc.options.iter().enumerate() {
-            let tried = inc.tried & (1 << i) != 0;
-            let fg = if tried { Color::srgb(0.45, 0.45, 0.45) } else { GREEN_300 };
-            b.spawn((
-                ActionButton(i),
-                Interaction::default(),
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    padding: UiRect::axes(px(8), px(6)),
-                    border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(px(4)),
-                    ..default()
-                },
-                BorderColor::all(if tried { Color::srgba(0.4, 0.4, 0.4, 0.4) } else { GREEN_500.with_alpha(0.5) }),
-                BackgroundColor(if tried { Color::NONE } else { GREEN_900.with_alpha(0.4) }),
-            ))
-            .with_children(|r| {
-                r.spawn(bold(art, format!("{}", i + 1), 12.0, fg));
-                r.spawn(emoji(art, action.emoji(), 14.0));
-                r.spawn(label(art, action.label(), 12.0, fg));
-            });
-        }
-    });
-}
