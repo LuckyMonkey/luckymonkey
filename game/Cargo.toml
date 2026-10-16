@@ -16,6 +16,10 @@ serde_json = "1"
 rand = { version = "0.9", default-features = false, features = ["small_rng", "std"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
+# Deep links read the URL hash (link.rs).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+
 [profile.release]
 opt-level = "s"
 lto = "thin"

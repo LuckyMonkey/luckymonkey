@@ -230,9 +230,11 @@ fn proceed(
     button: Query<&Interaction, (With<Proceed>, Changed<Interaction>)>,
     root: Single<Entity, With<WelcomeRoot>>,
     mut next: ResMut<NextState<Screen>>,
+    link: Res<crate::link::DeepLink>,
 ) {
     let clicked = button.iter().any(|i| *i == Interaction::Pressed);
-    if ready(&time) && (clicked || keys.just_pressed(KeyCode::Enter)) {
+    // A deep link (#node=… etc.) goes straight in.
+    if link.active() || (ready(&time) && (clicked || keys.just_pressed(KeyCode::Enter))) {
         commands.entity(*root).despawn();
         next.set(Screen::Playing);
     }

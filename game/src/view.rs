@@ -19,6 +19,8 @@ pub struct ViewState {
     pub selected: Option<usize>,
     /// Glide the camera here (cleared when reached or when the player pans).
     pub focus: Option<Vec2>,
+    /// Set the zoom to this (deep links), applied once.
+    pub zoom_to: Option<f32>,
 }
 
 /// Zoom requests from the HUD buttons, applied about the screen centre.
@@ -39,7 +41,7 @@ struct Drag {
 pub struct PointerOverUi(pub bool);
 
 pub fn plugin(app: &mut App) {
-    app.insert_resource(ViewState { zoom: 1.0, selected: None, focus: None })
+    app.insert_resource(ViewState { zoom: 1.0, selected: None, focus: None, zoom_to: None })
         .init_resource::<Drag>()
         .init_resource::<PointerOverUi>()
         .add_message::<ZoomBy>()
@@ -65,7 +67,14 @@ fn to_world(win: &Window, cam: &Transform, zoom: f32, p: Vec2) -> Vec2 {
     cam.translation.truncate() + Vec2::new(off.x, -off.y) / zoom
 }
 
-fn follow(time: Res<Time>, mut cam: Single<&mut Transform, With<Camera2d>>, mut view: ResMut<ViewState>) {
+fn follow(time: Res<Time>, cam: Cam, mut view: ResMut<ViewState>) {
+    let (mut cam, mut proj) = cam.into_inner();
+    if let Some(z) = view.zoom_to.take() {
+        view.zoom = z.clamp(MIN_ZOOM, MAX_ZOOM);
+        if let Projection::Orthographic(o) = &mut *proj {
+            o.scale = 1.0 / view.zoom;
+        }
+    }
     let Some(target) = view.focus else { return };
     // Aim a little above the node so the panel at the bottom doesn't cover it.
     let target = target - Vec2::Y * 80.0 / view.zoom;

@@ -402,7 +402,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<AlertListVersion>()
         .add_systems(Startup, setup_net)
         .add_systems(PostStartup, spawn_overlay)
-        .add_systems(OnEnter(Screen::Playing), spawn_hud)
+        .add_systems(OnEnter(Screen::Playing), (spawn_hud, apply_link).chain())
         .add_systems(Update, (links, frames, cards, popups, monkey_token))
         .add_systems(
             Update,
@@ -1064,6 +1064,63 @@ fn strikes(mut reader: MessageReader<Strike>, mut rng: ResMut<Rng>, mut shift: R
         let alert = incident(&mut rng, Failure::Surge, shift.clock);
         if net.raise(i, alert) {
             let msg = format!("⚡ Lightning hit {}!", net.names[i]);
+            shift.say(msg);
+        }
+    }
+}
+
+/// A deep link (see link.rs): fly to a node, open its panel, maybe stage trouble.
+fn apply_link(
+    link: Res<crate::link::DeepLink>,
+    mut rng: ResMut<Rng>,
+    mut shift: ResMut<Shift>,
+    mut net: ResMut<Net>,
+    mut monkey: ResMut<Monkey>,
+    mut view: ResMut<ViewState>,
+    world: Res<World>,
+) {
+    let node = link.node.as_deref().and_then(|id| world.nodes.iter().position(|n| n.id == id));
+    view.zoom_to = link.zoom;
+    if let Some(i) = node {
+        view.selected = Some(i);
+        view.focus = Some(net.at[i]);
+    }
+    let incident_kind = link.incident.as_deref().and_then(|k| match k {
+        "ddos" => Some(Failure::Ddos),
+        "worm" => Some(Failure::Worm),
+        "disparity" => Some(Failure::Disparity),
+        "deploy" => Some(Failure::BadDeploy),
+        "migration" => Some(Failure::Migration),
+        "lightning" | "surge" => Some(Failure::Surge),
+        "cert" => Some(Failure::Cert),
+        "leak" => Some(Failure::Leak),
+        "disk" => Some(Failure::DiskFull),
+        _ => None,
+    });
+    let forecast_kind = link.forecast.as_deref().and_then(|k| match k {
+        "cert" => Some(Failure::Cert),
+        "deploy" => Some(Failure::BadDeploy),
+        "disk" => Some(Failure::DiskFull),
+        "worm" => Some(Failure::Worm),
+        _ => None,
+    });
+    if !(link.shift || incident_kind.is_some() || forecast_kind.is_some()) {
+        return;
+    }
+    start(&mut shift, &mut net, &mut monkey);
+    // Give the staged problem the stage for a while before the day's own trouble starts.
+    shift.next_incident = 25.0;
+    shift.next_forecast = 35.0;
+    if let Some(i) = node {
+        if let Some(f) = incident_kind {
+            let alert = incident(&mut rng, f, 0.0);
+            net.raise(i, alert);
+            let msg = format!("🚨 {} {} on {}", f.emoji(), f.name(), net.names[i]);
+            shift.say(msg);
+        } else if let Some(f) = forecast_kind {
+            let alert = forecast(&mut rng, f, 0.0);
+            net.raise(i, alert);
+            let msg = format!("🔭 forecast for {} in {:.0}s", net.names[i], alert.ttl);
             shift.say(msg);
         }
     }

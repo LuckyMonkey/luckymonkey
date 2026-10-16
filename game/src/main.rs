@@ -4,6 +4,7 @@
 //! web build is just `luckymonkey.js` + `luckymonkey_bg.wasm`.
 
 mod clouds;
+mod link;
 mod npc;
 mod ops;
 mod ui;
@@ -173,6 +174,6 @@ fn main() {
         .insert_resource(Rng(0x9e37_79b9_7f4a_7c15))
         .init_state::<Screen>()
         .add_systems(PreStartup, load_art)
-        .add_plugins((world::plugin, water::plugin, npc::plugin, clouds::plugin, view::plugin, ui::plugin, ops::plugin))
+        .add_plugins((link::plugin, world::plugin, water::plugin, npc::plugin, clouds::plugin, view::plugin, ui::plugin, ops::plugin))
         .run();
 }
