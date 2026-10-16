@@ -8,6 +8,11 @@ The game is a [Bevy](https://bevyengine.org) 0.20 app (Rust → WebAssembly) in
 only serves the page that hosts its canvas (`app/page.tsx`) and the built
 `public/game/` files. Pixi.js (v0.2) is in git history.
 
+**Full documentation: [docs/index.md](docs/index.md)** (also in the wiki under
+`git:luckymonkey`): how to play, every failure type, the engine, the world, the
+simulation, the interface, build/deploy/test, outside assets and licences,
+decisions and known issues, and how to extend it.
+
 ## Build and deploy
 
 ```sh
@@ -68,5 +73,10 @@ Keys: **Space** most urgent alert · **1-4** fix · **G** send the monkey · **F
   (by `tools/make-textures.py` from `public/sprites/`). Everything is compiled into the wasm.
 - `art/` - unused source art from the original export (not served)
 
-Fonts: DejaVu Sans Mono (Bitstream Vera licence) and Twemoji Mozilla
-(graphics CC-BY 4.0, © Twitter / X Corp.; font MPL/Apache).
+Fonts: DejaVu Sans Mono (Bitstream Vera licence), Noto Sans Mono CJK JP subset
+(SIL Open Font License 1.1) and Twemoji Mozilla (graphics CC-BY 4.0,
+© Twitter / X Corp. and contributors; font MPL/Apache). Details and every other
+outside dependency: [docs/assets.md](docs/assets.md).
+
+Tools: `tools/browser-test.sh` (headless Firefox playthrough with screenshots),
+`tools/subset-fonts.py` (re-subset fonts after adding emoji or text).
