@@ -4,7 +4,7 @@ title: Lucky Monkey source - link.rs
 
 # Source: game/src/link.rs
 
-**Deep links: reads the URL hash (`#node=…&incident=…`) so a link can open the game at a place with something staged.** Explained in [interface](../interface.md). 63 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/link.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**Deep links: reads the URL hash (`#node=…&incident=…`) so a link can open the game at a place with something staged.** Explained in [interface](../interface.md). 65 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/link.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -17,9 +17,11 @@ Deep links: the URL hash can open the game at a place, with something staged.
 …/luckymonkey#shift                          skip the gate and start a shift
 
 The wiki documentation uses these for its "see it live" links, and the
-screenshot tooling uses them to frame shots. Incident names: ddos, worm,
-disparity, deploy, migration, lightning, cert, leak, disk. Forecast names:
-cert, deploy, disk, worm. Unknown values are ignored.
+screenshot tooling uses them to frame shots. Incident names are the fault
+keys in tuning.json (crash, dns, dhcp, cable, route, ddos, worm, cert, leak,
+disk, heat, power or lightning, deploy, migration, disparity, loop,
+broadcast, vlan); forecast names are faults with a warning stage (worm,
+cert, disk, deploy). Unknown values are ignored.
 
 ## Contents
 

@@ -4,7 +4,7 @@ title: Lucky Monkey source - main.rs
 
 # Source: game/src/main.rs
 
-**App setup: the window and canvas, shared fonts and textures (`Art`), procedural textures, the random generator, screens.** Explained in [engine](../engine.md). 206 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/main.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**App setup: the window and canvas, shared fonts and textures (`Art`), procedural textures, the random generator, screens.** Explained in [engine](../engine.md). 207 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/main.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -22,6 +22,7 @@ web build is just `luckymonkey.js` + `luckymonkey_bg.wasm`.
 | [mod link](#mod_link) |  |
 | [mod npc](#mod_npc) |  |
 | [mod ops](#mod_ops) |  |
+| [mod sim](#mod_sim) |  |
 | [mod ui](#mod_ui) |  |
 | [mod view](#mod_view) |  |
 | [mod water](#mod_water) |  |
@@ -79,6 +80,12 @@ mod npc;
 
 ```rust
 mod ops;
+```
+
+### mod sim
+
+```rust
+mod sim;
 ```
 
 ### mod ui

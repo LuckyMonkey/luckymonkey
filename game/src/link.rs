@@ -7,9 +7,11 @@
 //!   …/luckymonkey#shift                          skip the gate and start a shift
 //!
 //! The wiki documentation uses these for its "see it live" links, and the
-//! screenshot tooling uses them to frame shots. Incident names: ddos, worm,
-//! disparity, deploy, migration, lightning, cert, leak, disk. Forecast names:
-//! cert, deploy, disk, worm. Unknown values are ignored.
+//! screenshot tooling uses them to frame shots. Incident names are the fault
+//! keys in tuning.json (crash, dns, dhcp, cable, route, ddos, worm, cert, leak,
+//! disk, heat, power or lightning, deploy, migration, disparity, loop,
+//! broadcast, vlan); forecast names are faults with a warning stage (worm,
+//! cert, disk, deploy). Unknown values are ignored.
 
 use bevy::prelude::*;
 

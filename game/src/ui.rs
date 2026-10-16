@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::ops::{Net, Shift};
+use crate::ops::Game;
 use crate::view::{PointerOverUi, ViewState, ZoomBy};
 use crate::world::World;
 use crate::{Art, Screen};
@@ -329,7 +329,8 @@ fn zoom_label(view: Res<ViewState>, mut label: Single<&mut Text, With<ZoomLabel>
 fn status_color(s: &str) -> Color {
     match s {
         "online" => Color::srgb(0.29, 0.87, 0.5),
-        "unstable" => Color::srgb(0.98, 0.8, 0.08),
+        "unstable" | "degraded" => Color::srgb(0.98, 0.8, 0.08),
+        "unreachable" => Color::srgb(0.45, 0.52, 0.62),
         "erupting" => Color::srgb(0.98, 0.57, 0.24),
         _ => Color::srgb(0.97, 0.44, 0.44),
     }
@@ -359,16 +360,15 @@ fn panel(
     art: Res<Art>,
     world: Res<World>,
     view: Res<ViewState>,
-    net: Res<Net>,
-    shift: Res<Shift>,
+    game: Res<Game>,
     mut state: ResMut<PanelState>,
     roots: Query<Entity, With<PanelRoot>>,
     windows: Query<&Window>,
 ) {
-    if state.shown == view.selected && !state.dirty && state.net_version == net.version {
+    if state.shown == view.selected && !state.dirty && state.net_version == game.sim.version {
         return;
     }
-    state.net_version = net.version;
+    state.net_version = game.sim.version;
     if state.shown != view.selected {
         state.tab = Tab::Info;
     }
@@ -412,7 +412,11 @@ fn panel(
                             n.spawn(emoji(&art, node.emoji.clone(), 20.0));
                             n.spawn(bold(&art, node.name.clone(), 14.0, GREEN_400));
                         });
-                        t.spawn(label(&art, node.ip.clone(), 10.0, GREEN_300));
+                        let status = game.sim.health[index].label();
+                        t.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
+                            r.spawn((Node { width: px(8), height: px(8), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(status_color(status))));
+                            r.spawn(label(&art, format!("{} · {}", status.to_uppercase(), node.ip), 10.0, GREEN_300));
+                        });
                     });
                     h.spawn((CloseButton, Interaction::default(), Node { width: px(32), height: px(32), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }))
                         .with_child(label(&art, "×", 20.0, GREEN_400));
@@ -432,15 +436,14 @@ fn panel(
             });
             p.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), ..default() }).with_children(|body| match tab {
                 Tab::Info => {
-                    crate::ops::alert_box(body, &art, &net, &shift, index);
+                    // Urgent first: incident, time to loss, crew, responses. Flavour text last
+                    // when something is wrong; first when all is calm.
+                    crate::ops::alert_box(body, &art, &game, index);
+                    let calm = game.sim.faults[index].is_none();
                     let desc = if node.description.is_empty() { "No description available." } else { &node.description };
-                    body.spawn(label(&art, desc, 12.0, GREEN_300));
-                    let status = net.health[index].label();
-                    body.spawn(section(&art, "ステータス Status"));
-                    body.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|r| {
-                        r.spawn((Node { width: px(8), height: px(8), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(status_color(status))));
-                        r.spawn(label(&art, status, 12.0, GREEN_300));
-                    });
+                    if calm {
+                        body.spawn(label(&art, desc, 12.0, GREEN_300));
+                    }
                     if !node.connections.is_empty() {
                         body.spawn(section(&art, "接続 Connections"));
                         body.spawn(Node { flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|g| {
@@ -452,6 +455,10 @@ fn panel(
                                     });
                             }
                         });
+                    }
+                    if !calm {
+                        body.spawn(section(&art, "説明 About"));
+                        body.spawn(label(&art, desc, 11.0, GREEN_300.with_alpha(0.8)));
                     }
                     if let Some(level) = node.security {
                         body.spawn(section(&art, "セキュリティ Security"));

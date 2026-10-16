@@ -1,305 +1,54 @@
 #![allow(deprecated)] // Interaction: see ui.rs.
 
-//! On-call shifts - the game loop.
+//! On-call shifts: input and presentation for the simulation in sim.rs.
 //!
-//! You are the on-call monkey (🐒). Nodes are wired by their API connections;
-//! frames stream along every link. A shift runs 09:00-17:00 on the clock.
-//!
-//! - **Incidents** (reactive) break a node now and carry a TTL. When the TTL
-//!   runs out the node goes down, worms crawl on, stampedes spill over.
-//! - **Forecasts** (proactive) come from the Watchtower: a cert expiring, a
-//!   deploy scheduled, a disk filling. Act before the countdown and the
-//!   incident never happens. If the Watchtower is down you fly blind.
-//!
-//! Every fix takes time and is done where the monkey stands: pick a fix on any
-//! node and the monkey walks the links there (routing around down nodes, or
-//! hiking overland, slowly, when there's no route), then works. Down and
-//! degraded nodes drain the SLA; the shift is lost when it hits zero.
-
-use std::collections::VecDeque;
+//! The simulation (faults, the incident director, workers, the event stream)
+//! knows nothing about Bevy. This module owns one `Sim`, steps it every frame,
+//! turns input into orders, and draws it: the Time to Loss timer, the worker
+//! roster, open alerts, the shared event feed, outcome cards, the field guide,
+//! the end-of-shift summary, and the map overlays (links, frames, badges,
+//! workers, edge pins).
 
 use bevy::prelude::*;
 
 use crate::clouds::Strike;
-use crate::data::{tuning, ActionDef, FailureDef};
+use crate::data::tuning;
+use crate::sim::{self, Cat, Health, Phase, Sim, SimNode, Stage};
 use crate::ui::{Blocks, GREEN_300, GREEN_400, GREEN_500, GREEN_900, RED_400, RED_500};
 use crate::view::ViewState;
 use crate::world::{emoji_text, iso, node_color, NodeCard, World, NODE_Z};
 use crate::{Art, Rng, Screen};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Failure {
-    Ddos,
-    Worm,
-    Disparity,
-    BadDeploy,
-    Migration,
-    Surge,
-    Cert,
-    Leak,
-    DiskFull,
-}
+pub const AMBER: Color = Color::srgb(0.98, 0.75, 0.14);
+pub const RED: Color = Color::srgb(0.94, 0.27, 0.27);
+const SLATE: Color = Color::srgb(0.45, 0.52, 0.62);
+const TEXT: Color = Color::srgb(0.88, 0.97, 0.9);
+const PANEL_BG: Color = Color::srgb(0.0, 0.0, 0.0);
 
-impl Failure {
-    /// Key in tuning.json `failures`.
-    fn key(self) -> &'static str {
-        match self {
-            Failure::Ddos => "ddos",
-            Failure::Worm => "worm",
-            Failure::Disparity => "disparity",
-            Failure::BadDeploy => "deploy",
-            Failure::Migration => "migration",
-            Failure::Surge => "lightning",
-            Failure::Cert => "cert",
-            Failure::Leak => "leak",
-            Failure::DiskFull => "disk",
-        }
-    }
-    fn def(self) -> Option<&'static FailureDef> {
-        tuning().failures.get(self.key())
-    }
-    pub fn emoji(self) -> &'static str {
-        self.def().map_or("⚠️", |d| d.emoji.as_str())
-    }
-    pub fn name(self) -> &'static str {
-        self.def().map_or(self.key(), |d| d.name.as_str())
-    }
-    pub fn symptom(self) -> &'static str {
-        self.def().map_or("", |d| d.symptom.as_str())
-    }
-    pub fn fix(self) -> Action {
-        self.def().and_then(|d| Action::from_key(&d.fix)).unwrap_or(Action::Restart)
-    }
-    /// What the Watchtower says before it happens, and the action that prevents it.
-    pub fn forecast(self) -> Option<(&'static str, &'static str, Action)> {
-        let f = self.def()?.forecast.as_ref()?;
-        Some((f.emoji.as_str(), f.text.as_str(), Action::from_key(&f.prevent)?))
-    }
-    /// Seconds from appearing to escalating.
-    fn ttl(self) -> f32 {
-        self.def().map_or(40.0, |d| d.ttl)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Action {
-    RateLimit,
-    Quarantine,
-    Resync,
-    Rollback,
-    FallForward,
-    Failover,
-    RotateCert,
-    Restart,
-    Canary,
-    Cleanup,
-    Patch,
-}
-
-impl Action {
-    const ALL: [Action; 11] = [
-        Action::RateLimit,
-        Action::Quarantine,
-        Action::Resync,
-        Action::Rollback,
-        Action::FallForward,
-        Action::Failover,
-        Action::RotateCert,
-        Action::Restart,
-        Action::Canary,
-        Action::Cleanup,
-        Action::Patch,
-    ];
-    /// Key in tuning.json `actions`.
-    fn key(self) -> &'static str {
-        match self {
-            Action::RateLimit => "ratelimit",
-            Action::Quarantine => "quarantine",
-            Action::Resync => "resync",
-            Action::Rollback => "rollback",
-            Action::FallForward => "fallforward",
-            Action::Failover => "failover",
-            Action::RotateCert => "rotatecert",
-            Action::Restart => "restart",
-            Action::Canary => "canary",
-            Action::Cleanup => "cleanup",
-            Action::Patch => "patch",
-        }
-    }
-    fn from_key(k: &str) -> Option<Action> {
-        Action::ALL.into_iter().find(|a| a.key() == k)
-    }
-    fn def(self) -> Option<&'static ActionDef> {
-        tuning().actions.get(self.key())
-    }
-    pub fn emoji(self) -> &'static str {
-        self.def().map_or("🔧", |d| d.emoji.as_str())
-    }
-    pub fn label(self) -> &'static str {
-        self.def().map_or(self.key(), |d| d.label.as_str())
-    }
-    /// Seconds of work at the node.
-    pub fn secs(self) -> f32 {
-        self.def().map_or(3.0, |d| d.secs)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Health {
-    Online,
-    Degraded,
-    Down,
-}
-
-impl Health {
-    pub fn label(self) -> &'static str {
-        match self {
-            Health::Online => "online",
-            Health::Degraded => "unstable",
-            Health::Down => "offline",
-        }
-    }
-}
-
-/// Something wrong (or about to be) on a node.
-#[derive(Clone, Copy)]
-pub struct Alert {
-    pub failure: Failure,
-    /// Not broken yet: act before `ttl` runs out to prevent it.
-    pub forecast: bool,
-    /// Seconds until it hits (forecast) or escalates (incident).
-    pub ttl: f32,
-    pub options: [Action; 4],
-    /// Bitmask of options already tried (wrong).
-    pub tried: u8,
-    /// Shift time it appeared; also identifies it.
-    pub since: f32,
-}
-
-impl Alert {
-    pub fn right(&self) -> Action {
-        if self.forecast { self.failure.forecast().map_or(self.failure.fix(), |f| f.2) } else { self.failure.fix() }
-    }
-}
-
-/// Live state of the network. `version` bumps on every change so the UI can rebuild.
+/// The simulation plus the player's UI choices.
 #[derive(Resource)]
-pub struct Net {
-    pub health: Vec<Health>,
-    pub alerts: Vec<Option<Alert>>,
-    links: Vec<(usize, usize)>,
-    neighbours: Vec<Vec<usize>>,
-    /// World position of each node card.
-    at: Vec<Vec2>,
-    kinds: Vec<String>,
-    pub names: Vec<String>,
-    /// The Watchtower node (forecasts need it up).
-    watchtower: Option<usize>,
-    /// The fix the monkey is on its way to do, if any: (node, option).
-    pub queued: Option<(usize, usize)>,
-    pub version: u32,
+pub struct Game {
+    pub sim: Sim,
+    /// Worker picked in the roster (None: the best one for each job).
+    pub chosen: Option<usize>,
+    /// Difficulty of the next shift (training first).
+    pub next_level: usize,
+    guide_open: bool,
+    /// Outcome card shown (its time), and dismissed.
+    outcome_seen: f32,
+    outcome_hidden: bool,
+    /// Last order error, shown in the hint line for a moment.
+    pub notice: Option<(String, f32)>,
 }
 
-impl Net {
-    /// Forecasts are visible while the Watchtower is up.
-    pub fn sighted(&self) -> bool {
-        self.watchtower.is_none_or(|w| self.health[w] != Health::Down)
+impl Game {
+    pub fn vec(&self, i: usize) -> Vec2 {
+        Vec2::from(self.sim.nodes[i].pos)
     }
-    fn touch(&mut self) {
-        self.version = self.version.wrapping_add(1);
-    }
-    /// Raise an alert on a node that has none. Incidents degrade it right away.
-    fn raise(&mut self, node: usize, alert: Alert) -> bool {
-        if self.alerts[node].is_some() || self.health[node] == Health::Down {
-            return false;
-        }
-        if !alert.forecast {
-            self.health[node] = Health::Degraded;
-        }
-        self.alerts[node] = Some(alert);
-        self.touch();
-        true
+    fn err(&mut self, s: impl Into<String>) {
+        self.notice = Some((s.into(), self.sim.clock));
     }
 }
-
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum Phase {
-    #[default]
-    Idle,
-    Running,
-    Won,
-    Lost,
-}
-
-const START_HOUR: f32 = 9.0;
-const HOURS: f32 = 8.0;
-
-#[derive(Resource, Default)]
-pub struct Shift {
-    pub phase: Phase,
-    /// Seconds into the shift.
-    clock: f32,
-    sla: f32,
-    score: u32,
-    fixes: u32,
-    prevented: u32,
-    next_incident: f32,
-    next_forecast: f32,
-    /// Spent on vine swings (J): straight to any node, fast, over anything.
-    bananas: u32,
-    /// Right fixes in a row; multiplies points.
-    combo: u32,
-    log: VecDeque<(String, f32)>,
-}
-
-impl Shift {
-    fn say(&mut self, s: impl Into<String>) {
-        let now = self.clock;
-        self.log.push_front((s.into(), now));
-        self.log.truncate(5);
-    }
-    /// 0 at 09:00, 1 at 17:00.
-    fn progress(&self) -> f32 {
-        (self.clock / tuning().shift_secs).clamp(0.0, 1.0)
-    }
-    fn time_of_day(&self) -> String {
-        let h = START_HOUR + self.progress() * HOURS;
-        format!("{:02}:{:02}", h as u32, ((h.fract() * 60.0) as u32 / 5) * 5)
-    }
-}
-
-/// The on-call monkey.
-#[derive(Resource)]
-pub struct Monkey {
-    /// Node it is at (or last left).
-    at: usize,
-    /// Nodes still to walk to, in order.
-    path: VecDeque<usize>,
-    /// Progress along the current leg (0..1) and its length.
-    leg: f32,
-    leg_len: f32,
-    /// The current leg isn't a link: hiking overland, slowly.
-    overland: bool,
-    /// Pending or running work.
-    job: Option<Job>,
-    pos: Vec2,
-    /// The current leg is a vine swing (fast, straight, from `origin`).
-    swing: bool,
-    origin: Option<Vec2>,
-}
-
-#[derive(Clone, Copy)]
-struct Job {
-    node: usize,
-    option: usize,
-    action: Action,
-    /// Which alert it was ordered for (its `since`).
-    alert: f32,
-    /// Seconds of work left once on site.
-    left: f32,
-    total: f32,
-}
-
 
 #[derive(Component)]
 struct LinkLine(usize);
@@ -314,9 +63,9 @@ struct Badge(usize);
 #[derive(Component)]
 struct BadgeTtl(usize);
 #[derive(Component)]
-struct MonkeyToken;
+struct WorkerToken(usize);
 #[derive(Component)]
-struct WorkBar;
+struct WorkBar(usize);
 #[derive(Component)]
 struct Popup {
     born: f32,
@@ -324,64 +73,96 @@ struct Popup {
 #[derive(Component)]
 struct HudText;
 #[derive(Component)]
-struct MonkeyText;
+struct HintText;
 #[derive(Component)]
 struct HudBar;
 #[derive(Component)]
-struct LogText;
+struct StartButton;
+#[derive(Component)]
+struct StartLabel;
+#[derive(Component)]
+struct TtlBox;
+#[derive(Component)]
+struct TtlTitle;
+#[derive(Component)]
+struct TtlTime;
+#[derive(Component)]
+struct TtlWhat;
+#[derive(Component)]
+struct RosterRow(usize);
+#[derive(Component)]
+struct RosterText(usize);
 #[derive(Component)]
 struct AlertList;
 #[derive(Component)]
 struct AlertRow(usize);
 #[derive(Component)]
-struct StartButton;
+struct Feed;
 #[derive(Component)]
-struct StartLabel;
+struct FeedRow(usize);
+#[derive(Component)]
+struct OutcomeCard;
+#[derive(Component)]
+struct OutcomeText;
+#[derive(Component)]
+struct GuideButton;
+#[derive(Component)]
+struct GuidePanel;
+#[derive(Component)]
+struct SummaryPanel;
+#[derive(Component)]
+struct SummaryText;
+#[derive(Component)]
+struct SummaryButton;
+/// A node's stand-in pinned to the screen edge while the node is off screen.
+#[derive(Component)]
+struct EdgePin(usize);
+
 /// A fix button in the node panel (built by `alert_box`), by option index.
 #[derive(Component)]
 pub struct ActionButton(pub usize);
-/// "Send the monkey here" button in the node panel.
+#[derive(Component)]
+pub struct DiagnoseButton;
 #[derive(Component)]
 pub struct GoButton;
+#[derive(Component)]
+pub struct SwingButton;
+#[derive(Component)]
+pub struct CancelButton(pub usize);
 /// Live countdown text (alert list and node panel).
 #[derive(Component)]
 pub struct PanelTtl(pub usize);
 
 #[derive(Resource, Default)]
-struct AlertListVersion(Option<u32>);
-/// A node's stand-in pinned to the screen edge while the node is off screen.
-#[derive(Component)]
-struct EdgePin(usize);
-#[derive(Component)]
-struct NextText;
-/// "Swing here" button in the node panel.
-#[derive(Component)]
-pub struct SwingButton;
+struct Seen {
+    alerts: Option<u32>,
+    feed: Option<u32>,
+    guide: Option<(usize, bool)>,
+}
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<Shift>()
-        .init_resource::<AlertListVersion>()
-        .add_systems(Startup, setup_net)
+    app.init_resource::<Seen>()
+        .add_systems(Startup, setup)
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
-        .add_systems(Update, (pins, pin_clicks).run_if(in_state(Screen::Playing)))
-        .add_systems(Update, (links, frames, cards, popups, monkey_token))
+        .add_systems(Update, (links, frames, cards, popups, worker_tokens))
+        .add_systems(Update, (pins, pin_clicks, outcome_card, guide, summary).run_if(in_state(Screen::Playing)))
         .add_systems(
             Update,
-            (navigate, controls, walk, work, clock, strikes, hud, alert_list, live_ttls).chain().run_if(in_state(Screen::Playing)),
+            (navigate, controls, tick, strikes, hud, ttl_box, roster, alert_list, feed, live_ttls).chain().run_if(in_state(Screen::Playing)),
         );
 }
 
-fn data_health(status: Option<&str>) -> Health {
-    match status {
-        Some("offline") => Health::Down,
-        Some("unstable" | "erupting") => Health::Degraded,
-        _ => Health::Online,
-    }
-}
-
-fn setup_net(mut commands: Commands, world: Res<World>) {
-    let n = world.nodes.len();
+fn setup(mut commands: Commands, world: Res<World>, mut rng: ResMut<Rng>) {
+    let nodes: Vec<SimNode> = world
+        .nodes
+        .iter()
+        .map(|n| {
+            let p = &n.position;
+            let at = iso(p.x, p.y, world.ground(p.x, p.y).max(p.height));
+            SimNode { id: n.id.clone(), name: n.name.clone(), kind: n.kind.clone(), pos: at.into() }
+        })
+        .collect();
     let mut links = Vec::new();
     for (i, node) in world.nodes.iter().enumerate() {
         for c in &node.connections {
@@ -393,41 +174,32 @@ fn setup_net(mut commands: Commands, world: Res<World>) {
             }
         }
     }
-    let mut neighbours = vec![Vec::new(); n];
-    for &(a, b) in &links {
-        neighbours[a].push(b);
-        neighbours[b].push(a);
-    }
-    let at: Vec<Vec2> = world
-        .nodes
-        .iter()
-        .map(|node| {
-            let p = &node.position;
-            iso(p.x, p.y, world.ground(p.x, p.y).max(p.height))
-        })
-        .collect();
-    let home = world.nodes.iter().position(|n| n.kind == "monkey").unwrap_or(0);
-    commands.insert_resource(Monkey { at: home, path: VecDeque::new(), leg: 0.0, leg_len: 1.0, overland: false, job: None, pos: at[home], swing: false, origin: None });
-    commands.insert_resource(Net {
-        health: world.nodes.iter().map(|n| data_health(n.status.as_deref())).collect(),
-        alerts: vec![None; n],
-        links,
-        neighbours,
-        at,
-        kinds: world.nodes.iter().map(|n| n.kind.clone()).collect(),
-        names: world.nodes.iter().map(|n| n.name.clone()).collect(),
-        watchtower: world.nodes.iter().position(|n| n.kind == "monitor"),
-        queued: None,
-        version: 0,
-    });
+    // A different day every session (deterministic within it; tests pin seeds).
+    #[cfg(target_arch = "wasm32")]
+    let seed = js_sys::Date::now() as u64 ^ ((rng.f32() * 1e6) as u64) << 20;
+    #[cfg(not(target_arch = "wasm32"))]
+    let seed = ((rng.f32() * 1e6) as u64) << 16 | 0x5eed;
+    let sim = Sim::new(tuning().rules.clone(), nodes, links, seed);
+    commands.insert_resource(Game { sim, chosen: None, next_level: 0, guide_open: false, outcome_seen: -1.0, outcome_hidden: false, notice: None });
 }
+
+fn clock_str(t: f32, shift: f32) -> String {
+    let h = 9.0 + (t / shift).clamp(0.0, 1.0) * 8.0;
+    format!("{:02}:{:02}", h as u32, (h.fract() * 60.0) as u32)
+}
+
+fn mmss(s: f32) -> String {
+    let s = s.max(0.0).ceil() as u32;
+    format!("{:02}:{:02}", s / 60, s % 60)
+}
+
+// ------------------------------------------------------------------ map overlay
 
 const FRAME_GAP: f32 = 34.0;
 
-/// Links with a stream of frames each way, the monkey, and an alert badge per node card.
-fn spawn_overlay(mut commands: Commands, net: Res<Net>, monkey: Res<Monkey>, art: Res<Art>, cards: Query<(Entity, &NodeCard)>) {
-    for (i, &(a, b)) in net.links.iter().enumerate() {
-        let (pa, pb) = (net.at[a], net.at[b]);
+fn spawn_overlay(mut commands: Commands, game: Res<Game>, art: Res<Art>, cards: Query<(Entity, &NodeCard)>) {
+    for (i, &(a, b)) in game.sim.links.iter().enumerate() {
+        let (pa, pb) = (game.vec(a), game.vec(b));
         let d = pb - pa;
         commands.spawn((
             LinkLine(i),
@@ -451,47 +223,67 @@ fn spawn_overlay(mut commands: Commands, net: Res<Net>, monkey: Res<Monkey>, art
                 .with_child((BadgeTtl(card.0), Text2d::new(""), art.text(true, 22.0), TextColor(RED_400), Transform::from_xyz(0.0, 40.0, 0.01)));
         });
     }
-    commands
-        .spawn((MonkeyToken, emoji_text(&art, "🐒", 34.0), Transform::from_translation(monkey.pos.extend(NODE_Z + 30.0)).with_scale(Vec3::splat(0.5))))
-        .with_child((WorkBar, Sprite::from_color(Color::srgb(1.0, 0.85, 0.2), Vec2::new(60.0, 6.0)), Transform::from_xyz(0.0, -44.0, 0.01), Visibility::Hidden));
-}
-
-fn link_health(net: &Net, l: usize) -> Health {
-    let (a, b) = net.links[l];
-    match (net.health[a], net.health[b]) {
-        (Health::Down, _) | (_, Health::Down) => Health::Down,
-        (Health::Degraded, _) | (_, Health::Degraded) => Health::Degraded,
-        _ => Health::Online,
+    for (w, wk) in game.sim.workers.iter().enumerate() {
+        commands
+            .spawn((WorkerToken(w), emoji_text(&art, &wk.emoji, 34.0), Transform::from_translation(Vec2::from(wk.pos).extend(NODE_Z + 30.0)).with_scale(Vec3::splat(0.5))))
+            .with_children(|c| {
+                c.spawn((Text2d::new(wk.name.to_uppercase()), art.text(true, 16.0), TextColor(TEXT), Transform::from_xyz(0.0, -36.0, 0.01)));
+                c.spawn((WorkBar(w), Sprite::from_color(Color::srgb(1.0, 0.85, 0.2), Vec2::new(60.0, 6.0)), Transform::from_xyz(0.0, -50.0, 0.01), Visibility::Hidden));
+            });
     }
 }
 
-const AMBER: Color = Color::srgb(0.98, 0.75, 0.14);
-const RED: Color = Color::srgb(0.94, 0.27, 0.27);
+/// Is this link part of what the player is looking at (selection or trouble)?
+fn link_focus(game: &Game, view: &ViewState, l: usize) -> bool {
+    let (a, b) = game.sim.links[l];
+    view.selected.is_some_and(|s| s == a || s == b) || [a, b].iter().any(|&n| game.sim.faults[n].as_ref().is_some_and(|f| f.stage != Stage::Warning))
+}
 
-fn links(net: Res<Net>, mut q: Query<(&LinkLine, &mut Sprite)>) {
+fn link_health(sim: &Sim, l: usize) -> Health {
+    let (a, b) = sim.links[l];
+    let rank = |h: Health| match h {
+        Health::Down => 3,
+        Health::Unreachable => 2,
+        Health::Degraded => 1,
+        Health::Online => 0,
+    };
+    if rank(sim.health[a]) >= rank(sim.health[b]) { sim.health[a] } else { sim.health[b] }
+}
+
+/// Quiet by default; the selected node's neighbourhood and troubled links stand out.
+fn links(game: Res<Game>, view: Res<ViewState>, mut q: Query<(&LinkLine, &mut Sprite)>) {
     for (link, mut sprite) in &mut q {
-        sprite.color = match link_health(&net, link.0) {
-            Health::Online => GREEN_400.with_alpha(0.18),
-            Health::Degraded => AMBER.with_alpha(0.3),
-            Health::Down => RED.with_alpha(0.22),
+        let focus = link_focus(&game, &view, link.0);
+        let selected = view.selected.is_some_and(|s| game.sim.links[link.0].0 == s || game.sim.links[link.0].1 == s);
+        sprite.color = match link_health(&game.sim, link.0) {
+            Health::Online if selected => GREEN_400.with_alpha(0.6),
+            Health::Online => GREEN_400.with_alpha(if focus { 0.25 } else { 0.08 }),
+            Health::Degraded => AMBER.with_alpha(if focus { 0.45 } else { 0.2 }),
+            Health::Unreachable => SLATE.with_alpha(0.15),
+            Health::Down => RED.with_alpha(0.3),
         };
+        sprite.custom_size = Some(Vec2::new(sprite.custom_size.map_or(1.0, |s| s.x), if selected { 3.0 } else { 2.0 }));
     }
 }
 
-/// Frames ride each link both ways, in two lanes. A stampede floods its links
-/// with fast red frames heading in; a down link stalls (frames stop, dim red).
-fn frames(net: Res<Net>, time: Res<Time>, mut q: Query<(&LinkFrame, &mut Transform, &mut Sprite)>) {
+/// Frames ride each link both ways. A flood races red toward its victim; a down
+/// link stalls; unreachable links barely move; frames dim unless in focus.
+fn frames(game: Res<Game>, view: Res<ViewState>, time: Res<Time>, mut q: Query<(&LinkFrame, &mut Transform, &mut Sprite)>) {
     let t = time.elapsed_secs();
+    let sim = &game.sim;
     for (f, mut tf, mut sprite) in &mut q {
-        let (a, b) = net.links[f.link];
-        let health = link_health(&net, f.link);
-        let flood = [a, b].into_iter().find(|&n| net.alerts[n].is_some_and(|x| !x.forecast && x.failure == Failure::Ddos));
-        let len = net.at[a].distance(net.at[b]).max(1.0);
+        let (a, b) = sim.links[f.link];
+        let health = link_health(sim, f.link);
+        let flood = [a, b].into_iter().find(|&n| sim.faults[n].as_ref().is_some_and(|x| x.kind == "ddos" && x.stage != Stage::Warning && x.mitigated <= 0.0));
+        let len = game.vec(a).distance(game.vec(b)).max(1.0);
+        let focus = link_focus(&game, &view, f.link);
+        let dim = if focus { 1.0 } else { 0.35 };
         let (speed, color) = match (flood, health) {
             (Some(_), _) => (300.0, RED.with_alpha(0.9)),
-            (None, Health::Down) => (0.0, RED.with_alpha(0.3)),
-            (None, Health::Degraded) => (25.0, AMBER.with_alpha(0.8)),
-            (None, Health::Online) => (60.0, Color::srgba(0.7, 1.0, 0.85, 0.75)),
+            (None, Health::Down) => (0.0, RED.with_alpha(0.3 * dim)),
+            (None, Health::Unreachable) => (8.0, SLATE.with_alpha(0.35 * dim)),
+            (None, Health::Degraded) => (25.0, AMBER.with_alpha(0.8 * dim)),
+            (None, Health::Online) => (60.0, Color::srgba(0.7, 1.0, 0.85, 0.75 * dim)),
         };
         let k = (t * speed / len + f.offset).fract();
         let (from, to) = match flood {
@@ -499,34 +291,39 @@ fn frames(net: Res<Net>, time: Res<Time>, mut q: Query<(&LinkFrame, &mut Transfo
             None if f.forward => (a, b),
             None => (b, a),
         };
-        let dir = (net.at[to] - net.at[from]).normalize_or_zero();
-        // Keep to the right so the two directions don't overlap.
+        let dir = (game.vec(to) - game.vec(from)).normalize_or_zero();
         let lane = Vec2::new(dir.y, -dir.x) * if flood.is_some() { 0.0 } else { 4.0 };
-        // Stay clear of the node cards at either end.
         let margin = (42.0 / len).min(0.45);
         let k = margin + k * (1.0 - 2.0 * margin);
-        tf.translation = (net.at[from].lerp(net.at[to], k) + lane).extend(NODE_Z - 1.0);
+        tf.translation = (game.vec(from).lerp(game.vec(to), k) + lane).extend(NODE_Z - 1.0);
         tf.rotation = Quat::from_rotation_z(dir.to_angle());
         sprite.color = color;
     }
 }
 
-fn spreads(f: Failure) -> bool {
-    matches!(f, Failure::Worm | Failure::Ddos)
-}
-
-fn ttl_text(a: &Alert, health: Health) -> String {
-    if a.forecast {
-        format!("in {:.0}s", a.ttl.max(0.0))
-    } else if health == Health::Down && !spreads(a.failure) {
-        "DOWN".into()
-    } else {
-        format!("⏳{:.0}s", a.ttl.max(0.0))
+fn badge_text(sim: &Sim, i: usize) -> Option<(String, String, Color)> {
+    if let Some(f) = &sim.faults[i] {
+        if !sim.visible(i) {
+            return None;
+        }
+        let d = sim.rules.fault(&f.kind)?;
+        if f.is_warning() {
+            let g = d.warning.as_ref().map_or("🔮", |w| w.emoji.as_str());
+            return Some((g.into(), format!("⚠ {}s", f.ttl.ceil() as i32), AMBER));
+        }
+        if f.mitigated > 0.0 {
+            return Some((d.emoji.clone(), format!("⏱ {}s", f.mitigated.ceil() as i32), AMBER));
+        }
+        if f.stage == Stage::Down {
+            return Some((d.emoji.clone(), "DOWN".into(), RED_400));
+        }
+        return Some((d.emoji.clone(), format!("⏳{}s", f.ttl.ceil() as i32), RED_400));
     }
+    (sim.health[i] == Health::Unreachable).then(|| ("🔌".to_string(), "no path".to_string(), SLATE))
 }
 
 fn cards(
-    net: Res<Net>,
+    game: Res<Game>,
     time: Res<Time>,
     world: Res<World>,
     mut cards: Query<(&NodeCard, &mut Sprite)>,
@@ -534,68 +331,77 @@ fn cards(
     mut ttls: Query<(&BadgeTtl, &mut Text2d, &mut TextColor), Without<Badge>>,
 ) {
     let t = time.elapsed_secs();
-    let pulse = 0.5 + 0.5 * (t * 7.0).sin();
+    let pulse = 0.5 + 0.5 * (t * 3.0).sin();
+    let sim = &game.sim;
     for (card, mut sprite) in &mut cards {
         let base = node_color(&world.nodes[card.0].kind);
-        sprite.color = match net.health[card.0] {
+        sprite.color = match sim.health[card.0] {
             Health::Online => base.with_alpha(0.9),
-            Health::Degraded => Color::Srgba(base.to_srgba().mix(&AMBER.to_srgba(), pulse)).with_alpha(0.95),
-            Health::Down => Color::srgba(0.18, 0.1, 0.1, 0.95),
+            Health::Degraded => Color::Srgba(base.to_srgba().mix(&AMBER.to_srgba(), 0.35 + 0.3 * pulse)).with_alpha(0.95),
+            Health::Unreachable => Color::Srgba(base.to_srgba().mix(&SLATE.to_srgba(), 0.7)).with_alpha(0.6),
+            Health::Down => Color::srgba(0.22, 0.08, 0.08, 0.95),
         };
     }
-    let sighted = net.sighted();
     for (badge, mut text, mut tf, mut vis) in &mut badges {
-        match net.alerts[badge.0].filter(|a| !a.forecast || sighted) {
-            Some(a) => {
-                let glyph = if a.forecast { a.failure.forecast().map_or("🔮", |f| f.0) } else { a.failure.emoji() };
+        match badge_text(sim, badge.0) {
+            Some((glyph, _, _)) => {
                 if text.0 != glyph {
-                    text.0 = glyph.into();
+                    text.0 = glyph;
                 }
-                tf.translation.y = 62.0 + (t * 4.0 + badge.0 as f32).sin() * 3.0;
+                tf.translation.y = 62.0 + (t * 3.0 + badge.0 as f32).sin() * 2.0;
                 *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
         }
     }
     for (ttl, mut text, mut color) in &mut ttls {
-        if let Some(a) = net.alerts[ttl.0] {
-            let s = ttl_text(&a, net.health[ttl.0]);
+        if let Some((_, s, c)) = badge_text(sim, ttl.0) {
             if text.0 != s {
                 text.0 = s;
             }
-            color.0 = if a.forecast { AMBER } else { RED_400 };
+            color.0 = c;
         }
     }
 }
 
-fn monkey_token(
+fn worker_tokens(
     time: Res<Time>,
-    monkey: Res<Monkey>,
-    mut token: Single<&mut Transform, (With<MonkeyToken>, Without<WorkBar>)>,
-    mut bar: Single<(&mut Transform, &mut Visibility), (With<WorkBar>, Without<MonkeyToken>)>,
+    game: Res<Game>,
+    mut tokens: Query<(&WorkerToken, &mut Transform), Without<WorkBar>>,
+    mut bars: Query<(&WorkBar, &mut Transform, &mut Visibility), Without<WorkerToken>>,
 ) {
     let t = time.elapsed_secs();
-    let walking = !monkey.path.is_empty();
-    // Every leg is a leap: an arc scaled to its length (higher on a vine swing).
-    let hop = if !walking {
-        0.0
-    } else if monkey.overland {
-        (t * 12.0).sin().abs() * 6.0
-    } else {
-        let peak = (monkey.leg_len * 0.22).clamp(18.0, if monkey.swing { 240.0 } else { 90.0 });
-        (std::f32::consts::PI * monkey.leg).sin() * peak
-    };
-    // Stand beside the card, not on it.
-    token.translation = (monkey.pos + Vec2::new(34.0, 30.0 + hop)).extend(NODE_Z + 30.0);
-    let (bar_tf, vis) = &mut *bar;
-    match monkey.job.filter(|j| !walking && j.node == monkey.at) {
-        Some(j) => {
-            let done = 1.0 - (j.left / j.total).clamp(0.0, 1.0);
-            bar_tf.scale.x = done.max(0.02);
-            bar_tf.translation.x = -30.0 * (1.0 - done);
-            **vis = Visibility::Inherited;
+    let sim = &game.sim;
+    for (tok, mut tf) in &mut tokens {
+        let w = &sim.workers[tok.0];
+        let flies = sim.rules.workers[w.def].flies;
+        let hop = if !w.walking() {
+            if w.resting() { 0.0 } else { ((t * 2.0 + tok.0 as f32).sin() * 1.5).max(0.0) }
+        } else if w.overland {
+            (t * 12.0).sin().abs() * 6.0
+        } else if flies {
+            40.0 + (t * 8.0).sin() * 4.0
+        } else {
+            let peak = (w.leg_len * 0.22).clamp(18.0, if w.swing { 240.0 } else { 90.0 });
+            (std::f32::consts::PI * w.leg).sin() * peak
+        };
+        // Stand beside the card; each worker on its own side so they don't overlap.
+        let side = [Vec2::new(36.0, 30.0), Vec2::new(-36.0, 34.0), Vec2::new(0.0, -46.0)][tok.0 % 3];
+        tf.translation = (Vec2::from(w.pos) + side + Vec2::Y * hop).extend(NODE_Z + 30.0 + tok.0 as f32 * 0.1);
+        let sleepy: f32 = if w.resting() { 0.6 } else { 1.0 };
+        tf.scale = Vec3::splat(0.5 * sleepy.max(0.85));
+    }
+    for (bar, mut tf, mut vis) in &mut bars {
+        let w = &sim.workers[bar.0];
+        match w.queue.front().filter(|t| t.started && t.total > 0.0) {
+            Some(task) => {
+                let done = 1.0 - (task.left / task.total).clamp(0.0, 1.0);
+                tf.scale.x = done.max(0.02);
+                tf.translation.x = -30.0 * (1.0 - done);
+                *vis = Visibility::Inherited;
+            }
+            None => *vis = Visibility::Hidden,
         }
-        None => **vis = Visibility::Hidden,
     }
 }
 
@@ -613,152 +419,42 @@ fn popups(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &Popup,
     let now = time.elapsed_secs();
     for (e, p, mut tf, mut color) in &mut q {
         let age = now - p.born;
-        if age > 2.0 {
+        if age > 2.5 {
             commands.entity(e).despawn();
             continue;
         }
-        tf.translation.y += 25.0 * time.delta_secs();
-        color.0 = color.0.with_alpha((2.0 - age).min(1.0));
+        tf.translation.y += 20.0 * time.delta_secs();
+        color.0 = color.0.with_alpha((2.5 - age).min(1.0));
     }
 }
 
-/// Data stores get replica trouble and full disks.
-fn is_store(kind: &str) -> bool {
-    matches!(kind, "database" | "banana-cache" | "vault" | "lake" | "queue")
-}
+// ------------------------------------------------------------------ simulation + input
 
-fn options_for(rng: &mut Rng, right: Action) -> [Action; 4] {
-    let mut pool: Vec<Action> = Action::ALL.into_iter().filter(|a| *a != right).collect();
-    // Rollback vs fall-forward is the classic confusion: offer the other one when it applies.
-    let twin = match right {
-        Action::Rollback => Some(Action::FallForward),
-        Action::FallForward => Some(Action::Rollback),
-        _ => None,
-    };
-    let mut options = vec![right];
-    if let Some(t) = twin {
-        pool.retain(|a| *a != t);
-        options.push(t);
-    }
-    while options.len() < 4 {
-        options.push(pool.remove(rng.below(pool.len())));
-    }
-    for i in (1..4).rev() {
-        options.swap(i, rng.below(i + 1));
-    }
-    [options[0], options[1], options[2], options[3]]
-}
-
-fn incident(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
-    Alert { failure, forecast: false, ttl: failure.ttl(), options: options_for(rng, failure.fix()), tried: 0, since: now }
-}
-
-fn forecast(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
-    let right = failure.forecast().map_or(failure.fix(), |f| f.2);
-    Alert { failure, forecast: true, ttl: { let [lo, hi] = tuning().forecast_ttl; lo + rng.f32() * (hi - lo) }, options: options_for(rng, right), tried: 0, since: now }
-}
-
-fn start(shift: &mut Shift, net: &mut Net, monkey: &mut Monkey) {
-    *shift = Shift { phase: Phase::Running, sla: tuning().start_sla, bananas: tuning().bananas_start, next_incident: tuning().first_incident, next_forecast: tuning().first_forecast, ..default() };
-    net.health.iter_mut().for_each(|h| *h = Health::Online);
-    net.alerts.iter_mut().for_each(|a| *a = None);
-    net.queued = None;
-    net.touch();
-    monkey.path.clear();
-    monkey.job = None;
-    monkey.swing = false;
-    monkey.origin = None;
-    shift.say("09:00, shift started. Space jumps to the worst alert, 1-4 picks a fix: the monkey hops there and does it.");
-}
-
-/// Shortest walk from `from` to `to` over the links. Down nodes can't be
-/// crossed (only arrived at); links touching degraded nodes are slow.
-fn route(net: &Net, from: usize, to: usize) -> Option<Vec<usize>> {
-    let n = net.at.len();
-    let mut dist = vec![f32::INFINITY; n];
-    let mut prev = vec![usize::MAX; n];
-    let mut done = vec![false; n];
-    dist[from] = 0.0;
-    while let Some(u) = (0..n).filter(|&i| !done[i] && dist[i].is_finite()).min_by(|&a, &b| dist[a].total_cmp(&dist[b])) {
-        if u == to {
-            break;
-        }
-        done[u] = true;
-        if u != from && net.health[u] == Health::Down {
-            continue;
-        }
-        for &v in &net.neighbours[u] {
-            let slow = if net.health[u] == Health::Degraded || net.health[v] == Health::Degraded { 2.0 } else { 1.0 };
-            let d = dist[u] + net.at[u].distance(net.at[v]) * slow;
-            if d < dist[v] {
-                dist[v] = d;
-                prev[v] = u;
-            }
+fn tick(mut commands: Commands, time: Res<Time>, art: Res<Art>, mut game: ResMut<Game>) {
+    game.sim.step(time.delta_secs().min(0.25));
+    // A new outcome: a floating note on the map too.
+    if let Some(o) = game.sim.outcome.clone() {
+        if o.t != game.outcome_seen {
+            game.outcome_seen = o.t;
+            game.outcome_hidden = false;
+            let (text, color) = if o.title.starts_with("MITIGATED") {
+                ("⏱ temporary".to_string(), AMBER)
+            } else if o.ok {
+                ("✓ restored".to_string(), GREEN_400)
+            } else {
+                ("no effect".to_string(), RED_400)
+            };
+            let at = game.vec(o.node);
+            popup(&mut commands, &art, at, text, color, time.elapsed_secs());
         }
     }
-    if !dist[to].is_finite() {
-        return None;
-    }
-    let mut path = vec![to];
-    while *path.last().unwrap() != from {
-        path.push(prev[*path.last().unwrap()]);
-    }
-    path.reverse();
-    Some(path)
 }
 
-/// Seconds until the monkey reaches `to` on its current plan (roughly).
-fn eta(net: &Net, monkey: &Monkey, to: usize) -> f32 {
-    let Some(&next) = monkey.path.front() else {
-        return if monkey.at == to { 0.0 } else { net.at[monkey.at].distance(net.at[to]) / tuning().link_speed };
-    };
-    let speed = |overland: bool| if overland { tuning().hike_speed } else { tuning().link_speed };
-    let first = if monkey.swing { tuning().swing_speed } else { speed(monkey.overland) };
-    let mut t = (1.0 - monkey.leg) * monkey.leg_len / first;
-    let mut prev = next;
-    for &p in monkey.path.iter().skip(1) {
-        t += net.at[prev].distance(net.at[p]) / speed(!net.neighbours[prev].contains(&p));
-        prev = p;
-    }
-    t
-}
-
-impl Monkey {
-    /// Head for `to`. A leg in progress is finished first.
-    fn send(&mut self, net: &Net, to: usize) {
-        let walking = self.path.front().copied();
-        let from = walking.unwrap_or(self.at);
-        self.path.clear();
-        if let Some(next) = walking {
-            self.path.push_back(next);
-        }
-        if from != to {
-            match route(net, from, to) {
-                Some(p) => self.path.extend(p.into_iter().skip(1)),
-                None => self.path.push_back(to),
-            }
-        }
-        if walking.is_none() {
-            self.begin_leg(net);
-        }
-    }
-    /// Swing on a vine straight to `to`, from wherever the monkey is now.
-    fn swing_to(&mut self, net: &Net, to: usize) {
-        self.path.clear();
-        self.path.push_back(to);
-        self.origin = Some(self.pos);
-        self.leg = 0.0;
-        self.leg_len = self.pos.distance(net.at[to]).max(1.0);
-        self.overland = false;
-        self.swing = true;
-    }
-    fn begin_leg(&mut self, net: &Net) {
-        self.leg = 0.0;
-        self.swing = false;
-        self.origin = None;
-        if let Some(&next) = self.path.front() {
-            self.leg_len = net.at[self.at].distance(net.at[next]).max(1.0);
-            self.overland = !net.neighbours[self.at].contains(&next);
+fn strikes(mut reader: MessageReader<Strike>, mut rng: ResMut<Rng>, mut game: ResMut<Game>) {
+    for Strike(at) in reader.read() {
+        let Some((i, d)) = (0..game.sim.nodes.len()).map(|i| (i, game.vec(i).distance(*at))).min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
+        if d <= tuning().lightning_range && rng.f32() < tuning().lightning_chance {
+            game.sim.lightning(i);
         }
     }
 }
@@ -776,29 +472,38 @@ fn island_entry(world: &World, island: usize) -> Option<usize> {
     world.nodes.iter().position(|n| &n.id == id)
 }
 
-/// Jumping the selection around: arrows hop to the nearest node in that
-/// direction (links preferred), Q/E step between islands, Tab cycles alerts,
-/// edge pins fly to their node. Works in and out of a shift.
-fn navigate(
-    keys: Res<ButtonInput<KeyCode>>,
-    world: Res<World>,
-    net: Res<Net>,
-    monkey: Res<Monkey>,
-    mut view: ResMut<ViewState>,
-) {
-    let from = view.selected.unwrap_or(monkey.at);
+/// Open visible faults, most urgent first (down, then incidents by TTL, then warnings).
+fn urgent_order(sim: &Sim) -> Vec<usize> {
+    let mut open: Vec<usize> = (0..sim.nodes.len()).filter(|&i| sim.visible(i)).collect();
+    let key = |i: usize| {
+        let f = sim.faults[i].as_ref().unwrap();
+        match f.stage {
+            Stage::Down => -1.0,
+            Stage::Incident if f.mitigated > 0.0 => 500.0 + f.mitigated,
+            Stage::Incident => f.ttl,
+            Stage::Warning => 1000.0 + f.ttl,
+        }
+    };
+    open.sort_by(|&a, &b| key(a).total_cmp(&key(b)));
+    open
+}
+
+/// Moving the selection: arrows hop to the nearest node in that direction
+/// (links preferred), Q/E step between islands, Tab cycles open alerts.
+fn navigate(keys: Res<ButtonInput<KeyCode>>, world: Res<World>, game: Res<Game>, mut view: ResMut<ViewState>) {
+    let from = view.selected.unwrap_or(game.sim.workers.first().map_or(0, |w| w.at));
     let mut pick = None;
     for (k, dir) in ARROWS {
         if !keys.just_pressed(k) {
             continue;
         }
-        pick = (0..net.at.len())
+        pick = (0..game.sim.nodes.len())
             .filter(|&j| j != from)
             .filter_map(|j| {
-                let v = net.at[j] - net.at[from];
+                let v = game.vec(j) - game.vec(from);
                 let cos = v.normalize_or_zero().dot(dir);
                 (cos > 0.45).then(|| {
-                    let linked = if net.neighbours[from].contains(&j) { 0.6 } else { 1.0 };
+                    let linked = if game.sim.neighbours[from].contains(&j) { 0.6 } else { 1.0 };
                     (j, v.length() * (2.0 - cos) * linked)
                 })
             })
@@ -808,31 +513,844 @@ fn navigate(
     let islands = world.islands.len();
     if islands > 0 {
         let here = island_of(&world, from).unwrap_or(0);
-        let step = if keys.just_pressed(KeyCode::KeyE) {
-            Some(1)
+        if keys.just_pressed(KeyCode::KeyE) {
+            pick = island_entry(&world, (here + 1) % islands);
         } else if keys.just_pressed(KeyCode::KeyQ) {
-            Some(islands - 1)
-        } else {
-            None
-        };
-        if let Some(step) = step {
-            pick = island_entry(&world, (here + step) % islands);
+            pick = island_entry(&world, (here + islands - 1) % islands);
         }
     }
     if keys.just_pressed(KeyCode::Tab) {
-        let sighted = net.sighted();
-        let mut open: Vec<(usize, Alert)> = net.alerts.iter().enumerate().filter_map(|(i, a)| a.filter(|a| !a.forecast || sighted).map(|a| (i, a))).collect();
-        open.sort_by(|a, b| a.1.forecast.cmp(&b.1.forecast).then(a.1.ttl.total_cmp(&b.1.ttl)));
+        let open = urgent_order(&game.sim);
         if !open.is_empty() {
-            let next = view.selected.and_then(|s| open.iter().position(|(i, _)| *i == s)).map_or(0, |p| (p + 1) % open.len());
-            pick = Some(open[next].0);
+            let next = view.selected.and_then(|s| open.iter().position(|&i| i == s)).map_or(0, |p| (p + 1) % open.len());
+            pick = Some(open[next]);
         }
     }
     if let Some(j) = pick {
         view.selected = Some(j);
-        view.focus = Some(net.at[j]);
+        view.focus = Some(game.vec(j));
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+fn controls(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut game: ResMut<Game>,
+    mut view: ResMut<ViewState>,
+    start_button: Query<&Interaction, (Or<(With<StartButton>, With<SummaryButton>)>, Changed<Interaction>)>,
+    go_button: Query<&Interaction, (With<GoButton>, Changed<Interaction>)>,
+    swing_button: Query<&Interaction, (With<SwingButton>, Changed<Interaction>)>,
+    diagnose_button: Query<&Interaction, (With<DiagnoseButton>, Changed<Interaction>)>,
+    cancel_buttons: Query<(&Interaction, &CancelButton), Changed<Interaction>>,
+    action_buttons: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
+    rows: Query<(&Interaction, &AlertRow), Changed<Interaction>>,
+    roster_rows: Query<(&Interaction, &RosterRow), Changed<Interaction>>,
+    ttl_box: Query<&Interaction, (With<TtlBox>, Changed<Interaction>)>,
+    guide_button: Query<&Interaction, (With<GuideButton>, Changed<Interaction>)>,
+) {
+    if keys.just_pressed(KeyCode::KeyB) || guide_button.iter().any(|i| *i == Interaction::Pressed) {
+        game.guide_open = !game.guide_open;
+    }
+    // Worker choice: Z/X/C or a roster row (again to clear).
+    let mut choose = None;
+    for (n, k) in [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC].into_iter().enumerate() {
+        if keys.just_pressed(k) && n < game.sim.workers.len() {
+            choose = Some(n);
+        }
+    }
+    for (i, r) in &roster_rows {
+        if *i == Interaction::Pressed {
+            choose = Some(r.0);
+        }
+    }
+    if let Some(n) = choose {
+        game.chosen = if game.chosen == Some(n) { None } else { Some(n) };
+        let at = Vec2::from(game.sim.workers[n].pos);
+        if game.chosen.is_some() {
+            view.focus = Some(at);
+        }
+    }
+    let running = game.sim.phase == Phase::Running;
+    if !running {
+        if start_button.iter().any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) {
+            let level = game.next_level;
+            game.sim.start(level);
+            game.chosen = None;
+            game.outcome_hidden = true;
+        }
+        return;
+    }
+    for (i, row) in &rows {
+        if *i == Interaction::Pressed {
+            view.selected = Some(row.0);
+            view.focus = Some(game.vec(row.0));
+        }
+    }
+    if keys.just_pressed(KeyCode::Space) || ttl_box.iter().any(|i| *i == Interaction::Pressed) {
+        let target = game.sim.deadline().map(|d| d.node).or_else(|| urgent_order(&game.sim).first().copied());
+        if let Some(i) = target {
+            view.selected = Some(i);
+            view.focus = Some(game.vec(i));
+        }
+    }
+    if keys.just_pressed(KeyCode::KeyF) {
+        let w = game.chosen.unwrap_or(0);
+        view.focus = Some(Vec2::from(game.sim.workers[w].pos));
+    }
+    if keys.just_pressed(KeyCode::KeyR) {
+        let w = game.chosen.or_else(|| game.sim.workers.iter().position(|w| w.resting()));
+        if let Some(w) = w {
+            if let Err(e) = game.sim.rally(w) {
+                game.err(format!("Rally: {e}"));
+            }
+        }
+    }
+    if keys.just_pressed(KeyCode::Backspace) {
+        let w = game.chosen.or_else(|| game.sim.workers.iter().rposition(|w| w.queue.len() > 1)).unwrap_or(0);
+        if !game.sim.cancel_last(w) {
+            game.err("Nothing queued to cancel");
+        }
+    }
+    for (i, c) in &cancel_buttons {
+        if *i == Interaction::Pressed {
+            game.sim.cancel_last(c.0);
+        }
+    }
+    let Some(node) = view.selected else { return };
+    let chosen = game.chosen;
+    if keys.just_pressed(KeyCode::KeyJ) || swing_button.iter().any(|i| *i == Interaction::Pressed) {
+        // Only those who don't fly swing; default to Mango.
+        let w = chosen.filter(|&w| !game.sim.rules.workers[game.sim.workers[w].def].flies).unwrap_or(0);
+        if let Err(e) = game.sim.swing(w, node) {
+            game.err(format!("Swing: {e}"));
+        }
+    }
+    if keys.just_pressed(KeyCode::KeyG) || keys.just_pressed(KeyCode::Enter) || go_button.iter().any(|i| *i == Interaction::Pressed) {
+        if let Err(e) = game.sim.order(chosen, node, None) {
+            game.err(e);
+        }
+    }
+    if game.sim.faults[node].is_none() || !game.sim.visible(node) {
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyI) || diagnose_button.iter().any(|i| *i == Interaction::Pressed) {
+        if let Err(e) = game.sim.order(chosen, node, Some("diagnose")) {
+            game.err(e);
+        }
+    }
+    let mut choice = None;
+    for (n, k) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].into_iter().enumerate() {
+        if keys.just_pressed(k) {
+            choice = Some(n);
+        }
+    }
+    for (i, b) in &action_buttons {
+        if *i == Interaction::Pressed {
+            choice = Some(b.0);
+        }
+    }
+    let Some(choice) = choice else { return };
+    let f = game.sim.faults[node].as_ref().unwrap();
+    if f.tried & (1 << choice) != 0 || choice >= f.options.len() {
+        return;
+    }
+    let action = f.options[choice].clone();
+    if let Err(e) = game.sim.order(chosen, node, Some(&action)) {
+        game.err(e);
+    }
+}
+
+// ------------------------------------------------------------------ HUD
+
+fn boxed() -> impl Bundle {
+    (
+        Node {
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::axes(px(10), px(8)),
+            row_gap: px(5),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(8)),
+            ..default()
+        },
+        BorderColor::all(GREEN_500.with_alpha(0.4)),
+        BackgroundColor(PANEL_BG),
+    )
+}
+
+fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Query<&Window>) {
+    let narrow = windows.iter().next().is_some_and(|w| w.width() < 760.0);
+    // Left column: shift status, roster, open alerts, event feed.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(12),
+                left: px(12),
+                width: px(if narrow { 300.0 } else { 380.0 }),
+                max_width: percent(92),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                ..default()
+            },
+            GlobalZIndex(40),
+        ))
+        .with_children(|col| {
+            col.spawn((Blocks, Interaction::default(), boxed())).with_children(|b| {
+                b.spawn((HudText, Text::new("🐵 LUCKY MONKEY ON-CALL"), art.text(true, 13.0), TextColor(GREEN_400)));
+                b.spawn((Node { width: percent(100), height: px(4), border_radius: BorderRadius::MAX, overflow: Overflow::clip(), ..default() }, BackgroundColor(GREEN_900.with_alpha(0.6))))
+                    .with_child((HudBar, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GREEN_500)));
+                b.spawn((HintText, Text::new(""), art.text(true, 12.0), TextColor(AMBER)));
+                b.spawn(Node { column_gap: px(6), ..default() }).with_children(|r| {
+                    r.spawn((
+                        StartButton,
+                        Interaction::default(),
+                        Node { padding: UiRect::axes(px(10), px(6)), flex_grow: 1.0, justify_content: JustifyContent::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                        BorderColor::all(GREEN_500.with_alpha(0.6)),
+                        BackgroundColor(GREEN_900.with_alpha(0.5)),
+                        children![(StartLabel, Text::new("START SHIFT (Enter)"), art.text(true, 12.0), TextColor(GREEN_400))],
+                    ));
+                    r.spawn((
+                        GuideButton,
+                        Interaction::default(),
+                        Node { padding: UiRect::axes(px(10), px(6)), border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                        BorderColor::all(GREEN_500.with_alpha(0.6)),
+                        BackgroundColor(GREEN_900.with_alpha(0.3)),
+                        children![(Text::new("📖 Field guide (B)"), art.text(true, 12.0), TextColor(GREEN_300))],
+                    ));
+                });
+            });
+            // Roster.
+            col.spawn((Blocks, Interaction::default(), boxed())).with_children(|b| {
+                b.spawn((Text::new("CREW · Z/X/C picks who goes (again: auto)"), art.text(true, 10.0), TextColor(GREEN_400.with_alpha(0.8))));
+                for w in 0..game.sim.workers.len() {
+                    b.spawn((
+                        RosterRow(w),
+                        Interaction::default(),
+                        Node { padding: UiRect::axes(px(6), px(3)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(Color::NONE),
+                        children![(RosterText(w), Text::new(""), art.text(false, 12.0), TextColor(TEXT))],
+                    ));
+                }
+            });
+            col.spawn((AlertList, Blocks, Interaction::default(), Node { flex_direction: FlexDirection::Column, row_gap: px(3), ..default() }));
+            col.spawn((Feed, Blocks, Interaction::default(), boxed()));
+        });
+    // Top centre: the Time to Loss timer.
+    commands
+        .spawn((
+            // Wide: between the left column and the node panel. Narrow: under the left column's top box.
+            if narrow {
+                Node { position_type: PositionType::Absolute, top: px(12), right: px(60), ..default() }
+            } else {
+                Node { position_type: PositionType::Absolute, top: px(12), left: px(404), ..default() }
+            },
+            GlobalZIndex(41),
+        ))
+        .with_children(|c| {
+            c.spawn((
+                TtlBox,
+                Blocks,
+                Interaction::default(),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(px(16), px(8)),
+                    min_width: px(220),
+                    max_width: px(330),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(10)),
+                    ..default()
+                },
+                BorderColor::all(GREEN_500.with_alpha(0.5)),
+                BackgroundColor(PANEL_BG),
+            ))
+            .with_children(|b| {
+                b.spawn((TtlTitle, Text::new("✓ ALL CLEAR"), art.text(true, 12.0), TextColor(GREEN_300)));
+                b.spawn((TtlTime, Text::new(""), art.text(true, 34.0), TextColor(GREEN_300)));
+                b.spawn((TtlWhat, Text::new("No immediate threats"), art.text(false, 12.0), TextColor(TEXT), TextLayout::justify(Justify::Center)));
+            });
+        });
+    // Outcome card: bottom centre.
+    commands
+        .spawn((Node { position_type: PositionType::Absolute, bottom: px(44), left: px(0), right: px(0), justify_content: JustifyContent::Center, ..default() }, GlobalZIndex(45)))
+        .with_children(|c| {
+            c.spawn((
+                OutcomeCard,
+                Blocks,
+                Interaction::default(),
+                Node { display: Display::None, max_width: px(460), padding: UiRect::axes(px(12), px(8)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() },
+                BorderColor::all(GREEN_500),
+                BackgroundColor(PANEL_BG),
+                children![(OutcomeText, Text::new(""), art.text(false, 12.0), TextColor(TEXT))],
+            ));
+        });
+    // Field guide.
+    commands.spawn((
+        GuidePanel,
+        Blocks,
+        Interaction::default(),
+        Node {
+            display: Display::None,
+            position_type: PositionType::Absolute,
+            top: px(90),
+            left: px(if narrow { 12.0 } else { 404.0 }),
+            right: px(12),
+            max_width: px(520),
+            max_height: percent(75),
+            overflow: Overflow::scroll_y(),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            padding: UiRect::all(px(14)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(10)),
+            ..default()
+        },
+        BorderColor::all(GREEN_500.with_alpha(0.6)),
+        BackgroundColor(Color::srgb(0.0, 0.03, 0.01)),
+        GlobalZIndex(60),
+    ));
+    // End-of-shift summary.
+    commands
+        .spawn((Node { position_type: PositionType::Absolute, top: px(0), bottom: px(0), left: px(0), right: px(0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, GlobalZIndex(70)))
+        .with_children(|c| {
+            c.spawn((
+                SummaryPanel,
+                Blocks,
+                Interaction::default(),
+                Node {
+                    display: Display::None,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(10),
+                    max_width: px(560),
+                    margin: UiRect::all(px(12)),
+                    padding: UiRect::all(px(18)),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(12)),
+                    ..default()
+                },
+                BorderColor::all(GREEN_500),
+                BackgroundColor(Color::srgb(0.0, 0.02, 0.01)),
+            ))
+            .with_children(|p| {
+                p.spawn((SummaryText, Text::new(""), art.text(false, 13.0), TextColor(TEXT)));
+                p.spawn((
+                    SummaryButton,
+                    Interaction::default(),
+                    Node { padding: UiRect::axes(px(12), px(8)), justify_content: JustifyContent::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                    BorderColor::all(GREEN_500),
+                    BackgroundColor(GREEN_900.with_alpha(0.6)),
+                    children![(Text::new("NEXT SHIFT (Enter)"), art.text(true, 13.0), TextColor(GREEN_400))],
+                ));
+            });
+        });
+}
+
+fn set(texts: &mut Query<&mut Text>, e: Entity, s: String) {
+    if let Ok(mut t) = texts.get_mut(e) {
+        if t.0 != s {
+            t.0 = s;
+        }
+    }
+}
+
+/// One line telling the player what to do now.
+fn next_step(game: &Game, view: &ViewState) -> String {
+    let sim = &game.sim;
+    if let Some((msg, t)) = &game.notice {
+        if sim.clock - t < 4.0 {
+            return format!("⚠ {msg}");
+        }
+    }
+    match sim.phase {
+        Phase::Idle => return "▶ Enter: start your first shift (training). Arrows hop nodes, B opens the field guide.".into(),
+        Phase::Done | Phase::Collapsed => return "▶ Shift over: read the summary, then Enter for the next one.".into(),
+        Phase::Running => {}
+    }
+    if let Some(c) = sim.coach() {
+        return format!("🎓 {c}");
+    }
+    if let Some(sel) = view.selected.filter(|&s| sim.visible(s)) {
+        let f = sim.faults[sel].as_ref().unwrap();
+        if sim.workers.iter().any(|w| w.queue.iter().any(|t| t.node == sel && t.fault == Some(f.id))) {
+            return "▶ Someone is on it. Tab: next alert".into();
+        }
+        if !f.diagnosed && !f.is_warning() {
+            return "▶ Pick a response 1-4, or I to diagnose first (shows which one fixes the cause)".into();
+        }
+        return if f.is_warning() { "▶ Prevent it: pick the matching action 1-4 before Time to Loss runs out".into() } else { "▶ Pick a response 1-4".into() };
+    }
+    match urgent_order(sim).first() {
+        Some(&i) => format!("▶ {} needs attention: Space jumps there", sim.nodes[i].name),
+        None => "▶ All quiet. Enjoy the jungle; arrows hop nodes, B opens the field guide.".into(),
+    }
+}
+
+fn hud(
+    game: Res<Game>,
+    view: Res<ViewState>,
+    mut texts: Query<&mut Text>,
+    hud_text: Single<Entity, With<HudText>>,
+    hint_text: Single<Entity, With<HintText>>,
+    start_label: Single<Entity, With<StartLabel>>,
+    mut bar: Single<(&mut Node, &mut BackgroundColor), With<HudBar>>,
+    mut start_node: Single<&mut Node, (With<StartButton>, Without<HudBar>)>,
+) {
+    let sim = &game.sim;
+    let line = match sim.phase {
+        Phase::Idle => "🐵 LUCKY MONKEY ON-CALL\nKeep the jungle network running until 17:00.".to_string(),
+        _ => format!(
+            "🕘 SHIFT {} → 17:00   ★ {}{}   🍌 {}\n💚 NETWORK HEALTH {:.0}%   📈 SHIFT SLA {:.1}% (target {:.0}%)",
+            clock_str(sim.clock, sim.rules.shift_secs),
+            sim.score,
+            if sim.combo > 1 { format!(" 🔥×{}", sim.combo) } else { String::new() },
+            sim.bananas,
+            sim.health_now,
+            sim.sla,
+            sim.rules.sla_target,
+        ),
+    };
+    set(&mut texts, *hud_text, line);
+    set(&mut texts, *hint_text, next_step(&game, &view));
+    start_node.display = if sim.phase == Phase::Running { Display::None } else { Display::Flex };
+    let label = match sim.phase {
+        Phase::Idle => format!("START {} (Enter)", sim.rules.director.levels[game.next_level.min(sim.rules.director.levels.len() - 1)].name.to_uppercase()),
+        _ => "NEXT SHIFT (Enter)".into(),
+    };
+    set(&mut texts, *start_label, label);
+    let (node, bg) = &mut *bar;
+    node.width = percent(sim.progress() * 100.0);
+    bg.0 = if sim.health_now < 50.0 { RED } else { GREEN_500 };
+}
+
+/// The big timer: the next consequence, calm when there is none. No blinking:
+/// urgency shows as colour, a label and the number itself.
+fn ttl_box(
+    game: Res<Game>,
+    mut texts: Query<&mut Text>,
+    mut colors: Query<&mut TextColor>,
+    title: Single<Entity, With<TtlTitle>>,
+    time_e: Single<Entity, With<TtlTime>>,
+    what: Single<Entity, With<TtlWhat>>,
+    mut boxq: Single<(&mut BorderColor, &mut Node), With<TtlBox>>,
+) {
+    let sim = &game.sim;
+    let (border, node) = &mut *boxq;
+    node.display = if sim.phase == Phase::Running { Display::Flex } else { Display::None };
+    let (t, n, w, c) = match sim.deadline() {
+        Some(d) => {
+            let (label, c) = if d.secs <= 10.0 {
+                ("⏳ TIME TO LOSS · URGENT", RED_400)
+            } else if d.secs <= 30.0 {
+                ("⏳ TIME TO LOSS · SOON", AMBER)
+            } else {
+                ("⏳ TIME TO LOSS", GREEN_300)
+            };
+            let more = urgent_order(sim).len().saturating_sub(1);
+            let more = if more > 0 { format!("  (+{more} more · Tab)") } else { String::new() };
+            (label.to_string(), mmss(d.secs), format!("Next impact: {} · {}{more}", sim.nodes[d.node].name, d.what), c)
+        }
+        None => ("✓ ALL CLEAR".to_string(), String::new(), "No immediate threats".to_string(), GREEN_300),
+    };
+    set(&mut texts, *title, t);
+    set(&mut texts, *time_e, n);
+    set(&mut texts, *what, w);
+    for e in [*title, *time_e] {
+        if let Ok(mut col) = colors.get_mut(e) {
+            col.0 = c;
+        }
+    }
+    **border = BorderColor::all(c.with_alpha(0.7));
+}
+
+fn worker_line(sim: &Sim, w: usize) -> String {
+    let wk = &sim.workers[w];
+    let d = &sim.rules.workers[wk.def];
+    let stamina: String = (0..d.stamina).map(|i| if i < wk.stamina { '●' } else { '○' }).collect();
+    let state = if wk.resting() {
+        format!("💤 resting {:.0}s (R: 🍌 rally)", wk.rest)
+    } else if let Some(t) = wk.queue.front() {
+        let place = &sim.nodes[t.node].name;
+        let what = match t.action.as_deref() {
+            None => "going".to_string(),
+            Some("diagnose") => "🔍 diagnose".to_string(),
+            Some(a) => sim.rules.action(a).map_or(a.to_string(), |x| format!("{} {}", x.emoji, x.label)),
+        };
+        if t.started {
+            format!("🔧 {what} · {place} {:.0}s", t.left.max(0.0))
+        } else {
+            format!("→ {place} {:.0}s, then {what}", sim.eta(w, t.node).max(0.0))
+        }
+    } else if wk.walking() {
+        "→ moving".into()
+    } else {
+        format!("✓ free at {}", sim.nodes[wk.at].name)
+    };
+    let queued = if wk.queue.len() > 1 { format!("  +{} queued", wk.queue.len() - 1) } else { String::new() };
+    format!("{} {:<5} {stamina}  {state}{queued}", wk.emoji, wk.name.to_uppercase())
+}
+
+fn roster(game: Res<Game>, mut texts: Query<(&RosterText, &mut Text)>, mut rows: Query<(&RosterRow, &mut BorderColor, &mut BackgroundColor)>) {
+    for (r, mut text) in &mut texts {
+        let s = worker_line(&game.sim, r.0);
+        if text.0 != s {
+            text.0 = s;
+        }
+    }
+    for (r, mut border, mut bg) in &mut rows {
+        let on = game.chosen == Some(r.0);
+        *border = BorderColor::all(if on { AMBER } else { Color::NONE });
+        bg.0 = if on { Color::srgba(0.3, 0.22, 0.0, 0.5) } else { Color::NONE };
+    }
+}
+
+fn stage_tag(sim: &Sim, i: usize) -> (&'static str, Color) {
+    let f = sim.faults[i].as_ref().unwrap();
+    match f.stage {
+        Stage::Warning => ("WARN", AMBER),
+        _ if f.mitigated > 0.0 => ("HELD", AMBER),
+        Stage::Incident => ("INC", RED_400),
+        Stage::Down => ("DOWN", RED_500),
+    }
+}
+
+/// Open alerts, most urgent first, clickable. Rebuilt when the sim changes.
+fn alert_list(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut<Seen>, list: Single<(Entity, Option<&Children>), With<AlertList>>) {
+    let sim = &game.sim;
+    if seen.alerts == Some(sim.version) {
+        return;
+    }
+    seen.alerts = Some(sim.version);
+    let (root, children) = *list;
+    if let Some(children) = children {
+        for c in children.iter() {
+            commands.entity(c).despawn();
+        }
+    }
+    if sim.phase != Phase::Running {
+        return;
+    }
+    let open = urgent_order(sim);
+    commands.entity(root).with_children(|list| {
+        if !sim.sighted() {
+            list.spawn((
+                Node { padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
+                BackgroundColor(PANEL_BG),
+                children![(Text::new("🔭 Watchtower unreachable: warnings are hidden"), art.text(true, 11.0), TextColor(AMBER))],
+            ));
+        }
+        let cut = sim.unreachable();
+        if cut > 0 {
+            list.spawn((
+                Node { padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
+                BackgroundColor(PANEL_BG),
+                children![(Text::new(format!("🔌 {cut} unreachable (impact, not a fault: fix the down node)")), art.text(false, 11.0), TextColor(SLATE))],
+            ));
+        }
+        for &i in open.iter().take(5) {
+            let f = sim.faults[i].as_ref().unwrap();
+            let Some(d) = sim.rules.fault(&f.kind) else { continue };
+            let (tag, color) = stage_tag(sim, i);
+            let glyph = if f.is_warning() { d.warning.as_ref().map_or("🔮", |w| w.emoji.as_str()) } else { d.emoji.as_str() };
+            let who: String = sim.workers.iter().filter(|w| w.queue.iter().any(|t| t.node == i)).map(|w| w.emoji.as_str()).collect();
+            list.spawn((
+                AlertRow(i),
+                Interaction::default(),
+                Node { column_gap: px(6), align_items: AlignItems::Center, padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
+                BackgroundColor(PANEL_BG),
+            ))
+            .with_children(|r| {
+                r.spawn((Text::new(tag), art.text(true, 11.0), TextColor(color), Node { min_width: px(34), ..default() }));
+                r.spawn((PanelTtl(i), Text::new(""), art.text(true, 11.0), TextColor(color), Node { min_width: px(36), ..default() }));
+                r.spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(12.0), ..default() }));
+                r.spawn((Text::new(format!("{} · {}{}", sim.nodes[i].name, if f.is_warning() { "warning" } else { d.name.as_str() }, if who.is_empty() { String::new() } else { format!("  ← {who}") })), art.text(false, 11.0), TextColor(TEXT)));
+            });
+        }
+        if open.len() > 5 {
+            list.spawn((Text::new(format!("  +{} more (Tab cycles)", open.len() - 5)), art.text(false, 11.0), TextColor(GREEN_300)));
+        }
+    });
+}
+
+fn cat_color(c: Cat) -> Color {
+    match c {
+        Cat::Critical => RED_500,
+        Cat::Incident | Cat::Cascade => RED_400,
+        Cat::Warning | Cat::Mitigated => AMBER,
+        Cat::NoEffect => Color::srgb(0.95, 0.6, 0.45),
+        Cat::Resolved | Cat::Recover => GREEN_400,
+        Cat::Learn => Color::srgb(0.55, 0.8, 1.0),
+        Cat::Notice | Cat::Rest => Color::srgb(0.6, 0.7, 0.65),
+        _ => GREEN_300,
+    }
+}
+
+/// The shared stream: incidents and worker activity together, urgent lines kept in view.
+fn feed(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut<Seen>, root: Single<(Entity, Option<&Children>), With<Feed>>, rows: Query<(&Interaction, &FeedRow), Changed<Interaction>>, mut view: ResMut<ViewState>) {
+    for (i, r) in &rows {
+        if *i == Interaction::Pressed {
+            view.selected = Some(r.0);
+            view.focus = Some(game.vec(r.0));
+        }
+    }
+    let sim = &game.sim;
+    if seen.feed == Some(sim.version) {
+        return;
+    }
+    seen.feed = Some(sim.version);
+    let (root, children) = *root;
+    if let Some(children) = children {
+        for c in children.iter() {
+            commands.entity(c).despawn();
+        }
+    }
+    commands.entity(root).with_children(|b| {
+        b.spawn((Text::new("NETWORK LOG"), art.text(true, 10.0), TextColor(GREEN_400.with_alpha(0.8))));
+        for e in sim::feed(&sim.log, sim.clock, 8, 40.0) {
+            let count = if e.count > 1 { format!(" ×{}", e.count) } else { String::new() };
+            let line = format!("{} {} {} {}{count}", clock_str(e.t, sim.rules.shift_secs), e.icon, e.cat.tag(), e.text);
+            let mut row = b.spawn((Text::new(line), art.text(false, 11.0), TextColor(cat_color(e.cat))));
+            if let Some(n) = e.node {
+                row.insert((FeedRow(n), Interaction::default()));
+            }
+        }
+    });
+}
+
+/// Countdown texts in the alert list and node panel.
+fn live_ttls(game: Res<Game>, mut q: Query<(&PanelTtl, &mut Text)>) {
+    for (p, mut text) in &mut q {
+        let s = game.sim.faults[p.0].as_ref().map_or(String::new(), |f| {
+            if f.mitigated > 0.0 {
+                format!("{:.0}s", f.mitigated)
+            } else if f.stage == Stage::Down {
+                "—".into()
+            } else {
+                format!("{:.0}s", f.ttl.max(0.0))
+            }
+        });
+        if text.0 != s {
+            text.0 = s;
+        }
+    }
+}
+
+fn outcome_card(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut game: ResMut<Game>,
+    mut card: Single<(&mut Node, &mut BorderColor, &Interaction), With<OutcomeCard>>,
+    text: Single<Entity, With<OutcomeText>>,
+    mut texts: Query<&mut Text>,
+) {
+    let (node, border, interaction) = &mut *card;
+    if **interaction == Interaction::Pressed || keys.just_pressed(KeyCode::Escape) {
+        game.outcome_hidden = true;
+    }
+    let Some(o) = game.sim.outcome.clone().filter(|o| !game.outcome_hidden && game.sim.clock - o.t < 9.0 && game.sim.phase == Phase::Running) else {
+        node.display = Display::None;
+        return;
+    };
+    node.display = Display::Flex;
+    **border = BorderColor::all(if o.title.starts_with("MITIGATED") { AMBER } else if o.ok { GREEN_500 } else { RED_400 });
+    let mut s = format!("{}\nCause: {}\nAction: {}", o.title, o.cause, o.action);
+    if let Some(l) = &o.learned {
+        s += &format!("\nLearned: {l}");
+    }
+    s += "\n(click or Esc to dismiss)";
+    set(&mut texts, *text, s);
+}
+
+fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut<Seen>, panel: Single<(Entity, &mut Node, Option<&Children>), With<GuidePanel>>) {
+    let (root, mut node, children) = panel.into_inner();
+    node.display = if game.guide_open { Display::Flex } else { Display::None };
+    let key = (game.sim.learned.len(), game.guide_open);
+    if seen.guide == Some(key) {
+        return;
+    }
+    seen.guide = Some(key);
+    if let Some(children) = children {
+        for c in children.iter() {
+            commands.entity(c).despawn();
+        }
+    }
+    let sim = &game.sim;
+    commands.entity(root).with_children(|p| {
+        p.spawn((Text::new("📖 JUNGLE FIELD GUIDE  (B to close)"), art.text(true, 14.0), TextColor(GREEN_400)));
+        p.spawn((Text::new("Real networking terms, learned on the job. The jungle is fantasy; the terminology is real."), art.text(false, 11.0), TextColor(GREEN_300)));
+        let mut entries: Vec<(&str, String)> = vec![("timeloss", "always in effect".into())];
+        entries.extend(sim.learned.iter().map(|(k, ex)| (k.as_str(), ex.clone())));
+        for (k, example) in entries {
+            if let Some(c) = sim.rules.concepts.get(k) {
+                p.spawn((Text::new(format!("■ {}", c.name)), art.text(true, 12.0), TextColor(Color::srgb(0.55, 0.8, 1.0))));
+                p.spawn((Text::new(format!("{}\nSeen: {example}", c.text)), art.text(false, 11.0), TextColor(TEXT)));
+            }
+        }
+        let left = sim.rules.concepts.len().saturating_sub(sim.learned.len() + 1);
+        p.spawn((Text::new(format!("{left} more to discover: resolve or diagnose incidents to learn them.")), art.text(false, 11.0), TextColor(GREEN_300.with_alpha(0.7))));
+        p.spawn((Text::new("Workers"), art.text(true, 12.0), TextColor(GREEN_400)));
+        for d in &sim.rules.workers {
+            p.spawn((Text::new(format!("{} {} the {}: {}", d.emoji, d.name, d.species, d.role)), art.text(false, 11.0), TextColor(TEXT)));
+        }
+    });
+}
+
+fn summary(mut game: ResMut<Game>, mut panel: Single<&mut Node, With<SummaryPanel>>, text: Single<Entity, With<SummaryText>>, mut texts: Query<&mut Text>) {
+    let over = matches!(game.sim.phase, Phase::Done | Phase::Collapsed);
+    panel.display = if over { Display::Flex } else { Display::None };
+    if !over {
+        return;
+    }
+    let sim = &game.sim;
+    let title = if sim.phase == Phase::Done {
+        format!("🌅 SHIFT COMPLETE · 17:00 · {}", sim.level_def().name)
+    } else {
+        format!("💥 SHIFT ENDED EARLY · major outage at {}", clock_str(sim.clock, sim.rules.shift_secs))
+    };
+    let mut s = format!("{title}\n★ {}\n\n", sim.score);
+    for l in sim.summary() {
+        s += &l;
+        s.push('\n');
+    }
+    let next = if sim.phase == Phase::Done { game.sim.level + 1 } else { game.sim.level };
+    let levels = sim.rules.director.levels.len();
+    s += &format!("\nNext: {}", sim.rules.director.levels[next.min(levels - 1)].name);
+    set(&mut texts, *text, s);
+    game.next_level = next.min(levels - 1);
+}
+
+// ------------------------------------------------------------------ node panel (called from ui.rs)
+
+fn button(art: &Art, marker: impl Bundle, label: String, fg: Color, bg: Color) -> impl Bundle {
+    (
+        marker,
+        Interaction::default(),
+        Node {
+            align_items: AlignItems::Center,
+            column_gap: px(8),
+            padding: UiRect::axes(px(8), px(7)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(4)),
+            ..default()
+        },
+        BorderColor::all(fg.with_alpha(0.5)),
+        BackgroundColor(bg),
+        children![(Text::new(label), art.text(false, 12.0), TextColor(fg))],
+    )
+}
+
+/// The urgent part of the node panel: incident, time to loss, who's on it, responses.
+pub fn alert_box(body: &mut ChildSpawnerCommands, art: &Art, game: &Game, node: usize) {
+    let sim = &game.sim;
+    if sim.phase != Phase::Running {
+        return;
+    }
+    let crew: Vec<usize> = (0..sim.workers.len()).filter(|&w| sim.workers[w].queue.iter().any(|t| t.node == node)).collect();
+    let Some(f) = sim.faults[node].as_ref().filter(|_| sim.visible(node)) else {
+        if sim.health[node] == Health::Unreachable {
+            body.spawn((
+                Text::new("🔌 UNREACHABLE: this node is fine, but its path to the core router runs through a down node. Fix that node and this one recovers by itself."),
+                art.text(false, 12.0),
+                TextColor(SLATE),
+                Node { margin: UiRect::bottom(px(8)), ..default() },
+            ));
+        }
+        row_buttons(body, art, sim, &crew);
+        return;
+    };
+    let Some(d) = sim.rules.fault(&f.kind) else { return };
+    let warning = f.is_warning();
+    let (accent, bg) = if warning || f.mitigated > 0.0 { (AMBER, Color::srgba(0.3, 0.2, 0.0, 0.5)) } else { (RED_400, Color::srgba(0.3, 0.04, 0.04, 0.5)) };
+    let (glyph, title, text) = if warning {
+        let w = d.warning.as_ref().unwrap();
+        (w.emoji.as_str(), format!("WARNING · {}", d.name), w.text.clone())
+    } else {
+        let stage = match f.stage {
+            Stage::Down => "DOWN",
+            _ if f.mitigated > 0.0 => "MITIGATED",
+            _ => "INCIDENT",
+        };
+        (d.emoji.as_str(), format!("{stage} · {}", d.name), d.symptom.clone())
+    };
+    let who = if crew.is_empty() {
+        "Nobody assigned yet".to_string()
+    } else {
+        crew.iter().map(|&w| format!("{} {} (ETA {:.0}s)", sim.workers[w].emoji, sim.workers[w].name, sim.eta(w, node))).collect::<Vec<_>>().join(", ")
+    };
+    let worker = game.chosen.or_else(|| sim.pick_worker(node, None)).unwrap_or(0);
+    body.spawn((
+        Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(8)), margin: UiRect::bottom(px(8)), row_gap: px(6), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
+        BorderColor::all(accent.with_alpha(0.6)),
+        BackgroundColor(bg),
+    ))
+    .with_children(|b| {
+        b.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|r| {
+            r.spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(16.0), ..default() }));
+            r.spawn((Text::new(title), art.text(true, 12.0), TextColor(accent)));
+        });
+        b.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
+            let label = if f.mitigated > 0.0 { "⏱ relief ends in" } else if f.stage == Stage::Down { "⛔ down: same fix, 1.5× slower" } else { "⏳ time to loss" };
+            r.spawn((Text::new(label), art.text(true, 12.0), TextColor(accent)));
+            r.spawn((PanelTtl(node), Text::new(""), art.text(true, 14.0), TextColor(accent)));
+        });
+        b.spawn((Text::new(text), art.text(false, 12.0), TextColor(Color::srgb(1.0, 0.92, 0.86))));
+        b.spawn((Text::new(format!("👥 {who}")), art.text(false, 11.0), TextColor(GREEN_300)));
+        let chooser = if game.chosen.is_some() { "" } else { " (auto)" };
+        b.spawn((Text::new(format!("Responses for {} {}{chooser}:", sim.workers[worker].emoji, sim.workers[worker].name)), art.text(true, 10.0), TextColor(GREEN_400)));
+        for (i, action) in f.options.iter().enumerate() {
+            let tried = f.tried & (1 << i) != 0;
+            let a = sim.rules.action(action);
+            let (emoji, label) = a.map_or(("🔧", action.as_str()), |a| (a.emoji.as_str(), a.label.as_str()));
+            let able = sim.can_do(worker, action);
+            let secs = sim.work_secs(worker, action, node);
+            // After a diagnosis (or a failed try), say what each option does.
+            let tag = if f.diagnosed || tried {
+                let fixes = sim.fixes_for(node);
+                if fixes.contains(action) {
+                    "  ✓ fixes the cause".to_string()
+                } else {
+                    match sim.response(node, action) {
+                        Some(r) if r.effect == "mitigate" && !warning => format!("  ⏱ temporary ({:.0}s)", r.secs),
+                        _ => "  ✗ won't help".to_string(),
+                    }
+                }
+            } else {
+                String::new()
+            };
+            let fg = if tried || !able { Color::srgb(0.5, 0.5, 0.5) } else { GREEN_300 };
+            let heavy = if able { String::new() } else { " · too heavy for this worker".to_string() };
+            b.spawn((
+                ActionButton(i),
+                Interaction::default(),
+                Node { align_items: AlignItems::Center, column_gap: px(8), padding: UiRect::axes(px(8), px(7)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+                BorderColor::all(if tried { Color::srgba(0.4, 0.4, 0.4, 0.4) } else { GREEN_500.with_alpha(0.5) }),
+                BackgroundColor(if tried { Color::NONE } else { GREEN_900.with_alpha(0.4) }),
+            ))
+            .with_children(|r| {
+                r.spawn((Text::new(format!("{}", i + 1)), art.text(true, 12.0), TextColor(fg)));
+                r.spawn((Text::new(emoji), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(14.0), ..default() }));
+                r.spawn((Text::new(format!("{label} · {secs:.0}s{tag}{heavy}")), art.text(false, 12.0), TextColor(fg)));
+            });
+        }
+        if !f.diagnosed && !warning {
+            let secs = sim.work_secs(worker, "diagnose", node);
+            b.spawn(button(art, DiagnoseButton, format!("🔍 Diagnose first (I) · {secs:.0}s: shows what each option does"), Color::srgb(0.55, 0.8, 1.0), Color::srgba(0.0, 0.1, 0.2, 0.5)));
+        }
+    });
+    row_buttons(body, art, sim, &crew);
+}
+
+fn row_buttons(body: &mut ChildSpawnerCommands, art: &Art, sim: &Sim, crew: &[usize]) {
+    body.spawn(Node { column_gap: px(6), flex_wrap: FlexWrap::Wrap, row_gap: px(6), margin: UiRect::bottom(px(8)), ..default() }).with_children(|r| {
+        r.spawn(button(art, GoButton, "🐾 Send here (G)".into(), GREEN_300, GREEN_900.with_alpha(0.4)));
+        let can = sim.bananas >= sim.rules.swing_cost;
+        r.spawn(button(art, SwingButton, format!("🌿 Swing (J) 🍌{}", sim.rules.swing_cost), if can { AMBER } else { Color::srgb(0.45, 0.45, 0.45) }, Color::srgba(0.25, 0.2, 0.0, 0.4)));
+        for &w in crew {
+            r.spawn(button(art, CancelButton(w), format!("✖ cancel {}'s last job", sim.workers[w].name), RED_400, Color::NONE));
+        }
+    });
+}
+
+// ------------------------------------------------------------------ edge pins
 
 const PIN: f32 = 38.0;
 const PIN_MARGIN: f32 = 10.0;
@@ -865,22 +1383,18 @@ fn spawn_pins(mut commands: Commands, art: Res<Art>, world: Res<World>) {
 /// Nodes out of view turn into their icon, stuck to the screen edge in the
 /// direction they lie; back in view, the pin hides and the card is the node again.
 fn pins(
-    time: Res<Time>,
-    net: Res<Net>,
+    game: Res<Game>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
     mut q: Query<(&EdgePin, &mut Node, &mut BorderColor)>,
 ) {
     let (cam, cam_tf) = *camera;
     let size = window.size();
-    // Pins live inside the screen minus a margin; the bottom keeps clear of the controls hint.
     let (lo, hi) = (Vec2::splat(PIN_MARGIN + PIN / 2.0), size - Vec2::new(PIN_MARGIN + PIN / 2.0, 40.0 + PIN / 2.0));
     let centre = (lo + hi) / 2.0;
     let half = (hi - lo) / 2.0;
-    let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 6.0).sin();
     for (pin, mut node, mut border) in &mut q {
-        let Ok(p) = cam.world_to_viewport(cam_tf, net.at[pin.0].extend(0.0)) else { continue };
-        // The card is 80 world px; count it as visible while any of it is on screen.
+        let Ok(p) = cam.world_to_viewport(cam_tf, game.vec(pin.0).extend(0.0)) else { continue };
         let inside = p.x > -20.0 && p.y > -20.0 && p.x < size.x + 20.0 && p.y < size.y + 20.0;
         if inside {
             node.display = Display::None;
@@ -892,730 +1406,54 @@ fn pins(
         node.display = Display::Flex;
         node.left = px(at.x);
         node.top = px(at.y);
-        let base = match (net.alerts[pin.0], net.health[pin.0]) {
-            (_, Health::Down) => RED,
-            (Some(a), _) if !a.forecast => RED_400,
-            (Some(_), _) if net.sighted() => AMBER,
-            _ => GREEN_400,
+        let sim = &game.sim;
+        let c = match sim.health[pin.0] {
+            Health::Down => RED,
+            Health::Degraded => RED_400,
+            Health::Unreachable => SLATE,
+            Health::Online if sim.visible(pin.0) => AMBER,
+            Health::Online => GREEN_400.with_alpha(0.7),
         };
-        let c = if base == GREEN_400 { base.with_alpha(0.7) } else { base.with_alpha(0.4 + 0.6 * pulse) };
         *border = BorderColor::all(c);
     }
 }
 
-fn pin_clicks(net: Res<Net>, mut view: ResMut<ViewState>, q: Query<(&Interaction, &EdgePin), Changed<Interaction>>) {
+fn pin_clicks(game: Res<Game>, mut view: ResMut<ViewState>, q: Query<(&Interaction, &EdgePin), Changed<Interaction>>) {
     for (i, pin) in &q {
         if *i == Interaction::Pressed {
             view.selected = Some(pin.0);
-            view.focus = Some(net.at[pin.0]);
+            view.focus = Some(game.vec(pin.0));
         }
     }
 }
 
-fn controls(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut shift: ResMut<Shift>,
-    mut net: ResMut<Net>,
-    mut monkey: ResMut<Monkey>,
-    mut view: ResMut<ViewState>,
-    start_button: Query<&Interaction, (With<StartButton>, Changed<Interaction>)>,
-    swing_button: Query<&Interaction, (With<SwingButton>, Changed<Interaction>)>,
-    go_button: Query<&Interaction, (With<GoButton>, Changed<Interaction>)>,
-    action_buttons: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
-    rows: Query<(&Interaction, &AlertRow), Changed<Interaction>>,
-) {
-    let start_pressed = start_button.iter().any(|i| *i == Interaction::Pressed);
-    if shift.phase != Phase::Running {
-        if start_pressed || keys.just_pressed(KeyCode::Enter) {
-            start(&mut shift, &mut net, &mut monkey);
-        }
-        return;
-    }
-    for (i, row) in &rows {
-        if *i == Interaction::Pressed {
-            view.selected = Some(row.0);
-            view.focus = Some(net.at[row.0]);
-        }
-    }
-    if keys.just_pressed(KeyCode::Space) {
-        // Most urgent visible alert first; incidents before forecasts.
-        let sighted = net.sighted();
-        let pick = net
-            .alerts
-            .iter()
-            .enumerate()
-            .filter_map(|(i, a)| a.filter(|a| !a.forecast || sighted).map(|a| (i, a.ttl + if a.forecast { 30.0 } else { 0.0 })))
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((i, _)) = pick {
-            view.selected = Some(i);
-            view.focus = Some(net.at[i]);
-        }
-    }
-    if keys.just_pressed(KeyCode::KeyF) {
-        view.focus = Some(monkey.pos);
-    }
-    let Some(node) = view.selected else { return };
-    if keys.just_pressed(KeyCode::KeyJ) || swing_button.iter().any(|i| *i == Interaction::Pressed) {
-        let cost = tuning().swing_cost;
-        if node == monkey.at && monkey.path.is_empty() {
-            // Already here.
-        } else if shift.bananas >= cost {
-            shift.bananas -= cost;
-            if monkey.job.is_some_and(|j| j.node != node) {
-                monkey.job = None;
-                net.queued = None;
-            }
-            monkey.swing_to(&net, node);
-            let msg = format!("🌿 swinging to {} (-{cost} 🍌)", net.names[node]);
-            shift.say(msg);
-        } else {
-            shift.say("🍌 no bananas for a swing: fix things to earn them");
-        }
-        net.touch();
-    }
-    if keys.just_pressed(KeyCode::KeyG) || keys.just_pressed(KeyCode::Enter) || go_button.iter().any(|i| *i == Interaction::Pressed) {
-        monkey.job = None;
-        net.queued = None;
-        monkey.send(&net, node);
-        let msg = format!("🐒 heading to {}", net.names[node]);
-        shift.say(msg);
-        net.touch();
-    }
-    let mut choice = None;
-    for (n, k) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].into_iter().enumerate() {
-        if keys.just_pressed(k) {
-            choice = Some(n);
-        }
-    }
-    for (i, b) in &action_buttons {
-        if *i == Interaction::Pressed {
-            choice = Some(b.0);
-        }
-    }
-    let Some(choice) = choice else { return };
-    let Some(alert) = net.alerts[node] else { return };
-    if (alert.forecast && !net.sighted()) || alert.tried & (1 << choice) != 0 {
-        return;
-    }
-    let action = alert.options[choice];
-    let total = action.secs() * if net.health[node] == Health::Down { tuning().down_work_mult } else { 1.0 };
-    monkey.job = Some(Job { node, option: choice, action, alert: alert.since, left: total, total });
-    monkey.send(&net, node);
-    net.queued = Some((node, choice));
-    let msg = format!("🐒 {} {} at {}", action.emoji(), action.label(), net.names[node]);
-    shift.say(msg);
-    net.touch();
-}
-
-/// Move the monkey along its path.
-fn walk(time: Res<Time>, shift: Res<Shift>, net: Res<Net>, mut monkey: ResMut<Monkey>) {
-    if shift.phase != Phase::Running {
-        return;
-    }
-    let mut dt = time.delta_secs();
-    while dt > 0.0 {
-        let Some(&next) = monkey.path.front() else { break };
-        let base = if monkey.swing { tuning().swing_speed } else if monkey.overland { tuning().hike_speed } else { tuning().link_speed };
-        let degraded = net.health[next] == Health::Degraded || net.health[monkey.at] == Health::Degraded;
-        let slow = if degraded && !monkey.swing { 0.5 } else { 1.0 };
-        let speed = base * slow;
-        let step = speed * dt / monkey.leg_len;
-        if monkey.leg + step < 1.0 {
-            monkey.leg += step;
-            dt = 0.0;
-        } else {
-            dt -= (1.0 - monkey.leg) * monkey.leg_len / speed;
-            monkey.at = next;
-            monkey.path.pop_front();
-            monkey.begin_leg(&net);
-        }
-    }
-    monkey.pos = match monkey.path.front() {
-        Some(&next) => monkey.origin.unwrap_or(net.at[monkey.at]).lerp(net.at[next], monkey.leg),
-        None => net.at[monkey.at],
-    };
-}
-
-/// Do the queued fix once on site.
-fn work(mut commands: Commands, time: Res<Time>, art: Res<Art>, mut shift: ResMut<Shift>, mut net: ResMut<Net>, mut monkey: ResMut<Monkey>) {
-    if shift.phase != Phase::Running {
-        return;
-    }
-    let Some(mut job) = monkey.job else { return };
-    if !monkey.path.is_empty() || monkey.at != job.node {
-        return;
-    }
-    job.left -= time.delta_secs();
-    if job.left > 0.0 {
-        monkey.job = Some(job);
-        return;
-    }
-    monkey.job = None;
-    net.queued = None;
-    net.touch();
-    let now = time.elapsed_secs();
-    let node = job.node;
-    let name = net.names[node].clone();
-    let Some(mut alert) = net.alerts[node].filter(|a| a.since == job.alert) else {
-        shift.say(format!("🐒 {name}: nothing left to fix"));
-        return;
-    };
-    if job.action == alert.right() {
-        let t = tuning();
-        shift.combo += 1;
-        let mult = (1.0 + t.combo_step * (shift.combo - 1) as f32).min(t.combo_max);
-        let base = if alert.forecast { t.points_prevent } else { t.points_fix + alert.ttl.max(0.0) * t.points_per_ttl_sec };
-        let points = (base * mult) as u32;
-        shift.score += points;
-        shift.bananas += if alert.forecast { t.banana_prevent } else { t.banana_fix };
-        let combo = if shift.combo > 1 { format!(" x{mult:.2}").trim_end_matches('0').trim_end_matches('.').to_string() } else { String::new() };
-        net.alerts[node] = None;
-        net.health[node] = Health::Online;
-        if alert.forecast {
-            shift.prevented += 1;
-            shift.say(format!("✓ {name}: {} prevented (+{points})", alert.failure.name()));
-            popup(&mut commands, &art, net.at[node], format!("prevented +{points}{combo} 🍌"), AMBER, now);
-        } else {
-            shift.fixes += 1;
-            shift.say(format!("✓ {name}: {} fixed (+{points})", alert.failure.name()));
-            popup(&mut commands, &art, net.at[node], format!("fixed +{points}{combo} 🍌"), GREEN_400, now);
-        }
-    } else {
-        alert.tried |= 1 << job.option;
-        shift.combo = 0;
-        shift.sla -= tuning().wrong_fix_sla;
-        if !alert.forecast {
-            alert.ttl = (alert.ttl - tuning().wrong_fix_ttl).max(0.5);
-        }
-        net.alerts[node] = Some(alert);
-        shift.say(format!("✗ {name}: \"{}\" didn't help", job.action.label()));
-        popup(&mut commands, &art, net.at[node], "✗ didn't help".into(), RED_400, now);
-    }
-}
-
-/// The shift clock: countdowns, escalation, SLA drain, new trouble.
-fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut net: ResMut<Net>) {
-    if shift.phase != Phase::Running {
-        return;
-    }
-    let dt = time.delta_secs();
-    shift.clock += dt;
-    let n = net.health.len();
-    let mut spread = Vec::new();
-    for i in 0..n {
-        let Some(mut a) = net.alerts[i] else { continue };
-        a.ttl -= dt;
-        if a.ttl <= 0.0 {
-            let name = net.names[i].clone();
-            if a.forecast {
-                // Nobody acted in time: it happens.
-                let hit = match a.failure {
-                    Failure::BadDeploy | Failure::Migration if rng.f32() < 0.5 => Failure::Migration,
-                    Failure::BadDeploy | Failure::Migration => Failure::BadDeploy,
-                    f => f,
-                };
-                a = incident(&mut rng, hit, shift.clock);
-                net.health[i] = Health::Degraded;
-                shift.say(format!("🚨 {} {} on {name}", hit.emoji(), hit.name()));
-            } else {
-                a.ttl = tuning().down_ttl;
-                if net.health[i] != Health::Down {
-                    net.health[i] = Health::Down;
-                    shift.say(format!("⛔ {name} is down ({})", a.failure.name()));
-                    if a.failure == Failure::Disparity {
-                        shift.sla -= tuning().disparity_loss;
-                        shift.say(format!("💥 {name}: replicas diverged, data lost"));
-                    }
-                }
-                if spreads(a.failure) {
-                    spread.push((i, a.failure));
-                }
-            }
-            net.touch();
-        }
-        net.alerts[i] = Some(a);
-    }
-    for (from, failure) in spread {
-        let healthy: Vec<usize> = net.neighbours[from].iter().copied().filter(|&j| net.alerts[j].is_none() && net.health[j] == Health::Online).collect();
-        if healthy.is_empty() {
-            continue;
-        }
-        let j = healthy[rng.below(healthy.len())];
-        let alert = incident(&mut rng, failure, shift.clock);
-        if net.raise(j, alert) {
-            let msg = format!("{} {} spread from {} to {}", failure.emoji(), failure.name(), net.names[from], net.names[j]);
-            shift.say(msg);
-        }
-    }
-    let drain: f32 = net
-        .health
-        .iter()
-        .map(|h| match h {
-            Health::Online => 0.0,
-            Health::Degraded => tuning().drain_degraded,
-            Health::Down => tuning().drain_down,
-        })
-        .sum();
-    shift.sla -= drain * dt;
-
-    // New trouble, more often as the day goes on: reactive incidents and Watchtower forecasts.
-    let p = shift.progress();
-    let free = |net: &Net| -> Vec<usize> { (0..n).filter(|&i| net.alerts[i].is_none() && net.health[i] == Health::Online).collect() };
-    if shift.clock >= shift.next_incident {
-        shift.next_incident = shift.clock + (tuning().incident_every[0] - tuning().incident_every[1] * p) * (0.7 + rng.f32() * 0.6);
-        let free = free(&net);
-        if !free.is_empty() {
-            let i = free[rng.below(free.len())];
-            let failure = if is_store(&net.kinds[i]) && rng.f32() < 0.4 {
-                Failure::Disparity
-            } else {
-                [Failure::Ddos, Failure::Worm, Failure::Leak, Failure::Ddos][rng.below(4)]
-            };
-            let alert = incident(&mut rng, failure, shift.clock);
-            net.raise(i, alert);
-            let msg = format!("🚨 {} {} on {}", failure.emoji(), failure.name(), net.names[i]);
-            shift.say(msg);
-        }
-    }
-    if shift.clock >= shift.next_forecast {
-        shift.next_forecast = shift.clock + (tuning().forecast_every[0] - tuning().forecast_every[1] * p) * (0.7 + rng.f32() * 0.6);
-        let free = free(&net);
-        if !free.is_empty() {
-            let i = free[rng.below(free.len())];
-            let failure = if is_store(&net.kinds[i]) && rng.f32() < 0.5 {
-                Failure::DiskFull
-            } else {
-                [Failure::Cert, Failure::BadDeploy, Failure::Worm, Failure::Cert][rng.below(4)]
-            };
-            let alert = forecast(&mut rng, failure, shift.clock);
-            net.raise(i, alert);
-            if net.sighted() {
-                let msg = format!("🔭 forecast for {} in {:.0}s", net.names[i], alert.ttl);
-                shift.say(msg);
-            }
-        }
-    }
-
-    if shift.sla <= 0.0 {
-        shift.sla = 0.0;
-        shift.phase = Phase::Lost;
-        let s = format!("SLA breached at {}. ★ {}  fixes {}  prevented {}", shift.time_of_day(), shift.score, shift.fixes, shift.prevented);
-        shift.say(s);
-        net.touch();
-    } else if shift.clock >= tuning().shift_secs {
-        shift.phase = Phase::Won;
-        let bonus = (shift.sla * tuning().survive_mult) as u32;
-        shift.score += bonus;
-        let s = format!("17:00, shift survived! SLA bonus +{bonus}. ★ {}", shift.score);
-        shift.say(s);
-        net.touch();
-    }
-}
-
-/// Lightning from a storm cloud knocks out the power of the node it hits.
-fn strikes(mut reader: MessageReader<Strike>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut net: ResMut<Net>) {
-    for Strike(at) in reader.read() {
-        if shift.phase != Phase::Running {
-            continue;
-        }
-        let Some((i, d)) = net.at.iter().enumerate().map(|(i, p)| (i, p.distance(*at))).min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
-        if d > tuning().lightning_range || rng.f32() > tuning().lightning_chance {
-            continue;
-        }
-        let alert = incident(&mut rng, Failure::Surge, shift.clock);
-        if net.raise(i, alert) {
-            let msg = format!("⚡ Lightning hit {}!", net.names[i]);
-            shift.say(msg);
-        }
-    }
-}
+// ------------------------------------------------------------------ deep links
 
 /// A deep link (see link.rs): fly to a node, open its panel, maybe stage trouble.
-fn apply_link(
-    link: Res<crate::link::DeepLink>,
-    mut rng: ResMut<Rng>,
-    mut shift: ResMut<Shift>,
-    mut net: ResMut<Net>,
-    mut monkey: ResMut<Monkey>,
-    mut view: ResMut<ViewState>,
-    world: Res<World>,
-) {
+fn apply_link(link: Res<crate::link::DeepLink>, mut game: ResMut<Game>, mut view: ResMut<ViewState>, world: Res<World>) {
     let node = link.node.as_deref().and_then(|id| world.nodes.iter().position(|n| n.id == id));
     view.zoom_to = link.zoom;
     if let Some(i) = node {
         view.selected = Some(i);
-        view.focus = Some(net.at[i]);
+        view.focus = Some(game.vec(i));
     }
-    let incident_kind = link.incident.as_deref().and_then(|k| match k {
-        "ddos" => Some(Failure::Ddos),
-        "worm" => Some(Failure::Worm),
-        "disparity" => Some(Failure::Disparity),
-        "deploy" => Some(Failure::BadDeploy),
-        "migration" => Some(Failure::Migration),
-        "lightning" | "surge" => Some(Failure::Surge),
-        "cert" => Some(Failure::Cert),
-        "leak" => Some(Failure::Leak),
-        "disk" => Some(Failure::DiskFull),
-        _ => None,
-    });
-    let forecast_kind = link.forecast.as_deref().and_then(|k| match k {
-        "cert" => Some(Failure::Cert),
-        "deploy" => Some(Failure::BadDeploy),
-        "disk" => Some(Failure::DiskFull),
-        "worm" => Some(Failure::Worm),
-        _ => None,
-    });
-    if !(link.shift || incident_kind.is_some() || forecast_kind.is_some()) {
+    let key = |k: &str| match k {
+        "lightning" | "surge" => "power".to_string(),
+        other => other.to_string(),
+    };
+    let incident = link.incident.as_deref().map(key).filter(|k| game.sim.rules.faults.contains_key(k));
+    let warning = link.forecast.as_deref().map(key).filter(|k| game.sim.rules.faults.get(k).is_some_and(|f| f.warning.is_some()));
+    if !(link.shift || incident.is_some() || warning.is_some()) {
         return;
     }
-    start(&mut shift, &mut net, &mut monkey);
-    // Give the staged problem the stage for a while before the day's own trouble starts.
-    shift.next_incident = 25.0;
-    shift.next_forecast = 35.0;
+    // Staged scenes start a regular shift (no training script).
+    let level = if incident.is_some() || warning.is_some() { 1 } else { 0 };
+    game.sim.start(level);
     if let Some(i) = node {
-        if let Some(f) = incident_kind {
-            let alert = incident(&mut rng, f, 0.0);
-            net.raise(i, alert);
-            let msg = format!("🚨 {} {} on {}", f.emoji(), f.name(), net.names[i]);
-            shift.say(msg);
-        } else if let Some(f) = forecast_kind {
-            let alert = forecast(&mut rng, f, 0.0);
-            net.raise(i, alert);
-            let msg = format!("🔭 forecast for {} in {:.0}s", net.names[i], alert.ttl);
-            shift.say(msg);
+        if let Some(k) = incident {
+            game.sim.raise(i, &k, false, None);
+        } else if let Some(k) = warning {
+            game.sim.raise(i, &k, true, None);
         }
     }
-}
-
-fn spawn_hud(mut commands: Commands, art: Res<Art>) {
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(16),
-            left: px(16),
-            max_width: px(440),
-            margin: UiRect::right(px(64)),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(6),
-            ..default()
-        },
-        GlobalZIndex(40),
-        children![
-            (
-                Blocks,
-                Interaction::default(),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::axes(px(10), px(8)),
-                    row_gap: px(6),
-                    border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(px(8)),
-                    ..default()
-                },
-                BorderColor::all(GREEN_500.with_alpha(0.4)),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.96)),
-                children![
-                    (HudText, Text::new("🐵 ON-CALL"), art.text(true, 13.0), TextColor(GREEN_400)),
-                    (
-                        Node { width: percent(100), height: px(4), border_radius: BorderRadius::MAX, overflow: Overflow::clip(), ..default() },
-                        BackgroundColor(GREEN_900.with_alpha(0.6)),
-                        children![(HudBar, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GREEN_500))],
-                    ),
-                    (MonkeyText, Text::new(""), art.text(false, 11.0), TextColor(GREEN_300)),
-                    (NextText, Text::new(""), art.text(true, 11.0), TextColor(AMBER)),
-                    (
-                        StartButton,
-                        Interaction::default(),
-                        Node {
-                            padding: UiRect::axes(px(10), px(6)),
-                            justify_content: JustifyContent::Center,
-                            border: UiRect::all(px(1)),
-                            border_radius: BorderRadius::MAX,
-                            ..default()
-                        },
-                        BorderColor::all(GREEN_500.with_alpha(0.6)),
-                        BackgroundColor(GREEN_900.with_alpha(0.5)),
-                        children![(StartLabel, Text::new("START SHIFT (Enter)"), art.text(true, 12.0), TextColor(GREEN_400))],
-                    ),
-                ],
-            ),
-            (AlertList, Blocks, Interaction::default(), Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Start, row_gap: px(3), ..default() }),
-            (LogText, Text::new(""), art.text(false, 11.0), TextColor(GREEN_300), Node { padding: UiRect::horizontal(px(4)), ..default() }),
-        ],
-    ));
-}
-
-fn set(texts: &mut Query<&mut Text>, e: Entity, s: String) {
-    if let Ok(mut t) = texts.get_mut(e) {
-        if t.0 != s {
-            t.0 = s;
-        }
-    }
-}
-
-fn hud(
-    shift: Res<Shift>,
-    net: Res<Net>,
-    monkey: Res<Monkey>,
-    mut texts: Query<&mut Text>,
-    hud_text: Single<Entity, With<HudText>>,
-    monkey_text: Single<Entity, With<MonkeyText>>,
-    next_text: Single<Entity, With<NextText>>,
-    view: Res<ViewState>,
-    log_text: Single<Entity, With<LogText>>,
-    start_label: Single<Entity, With<StartLabel>>,
-    mut bar: Single<(&mut Node, &mut BackgroundColor), With<HudBar>>,
-    mut start_node: Single<&mut Node, (With<StartButton>, Without<HudBar>)>,
-) {
-    let incidents = net.alerts.iter().flatten().filter(|a| !a.forecast).count();
-    let forecasts = net.alerts.iter().flatten().filter(|a| a.forecast).count();
-    let line = match shift.phase {
-        Phase::Idle => "🐵 ON-CALL · keep the jungle network up until 17:00".to_string(),
-        Phase::Running => format!(
-            "🕘 {}  SLA {:.0}%  ★ {}{}  🍌 {}  🚨 {}  🔮 {}",
-            shift.time_of_day(),
-            shift.sla.max(0.0),
-            shift.score,
-            if shift.combo > 1 { format!(" 🔥{}", shift.combo) } else { String::new() },
-            shift.bananas,
-            incidents,
-            if net.sighted() { forecasts.to_string() } else { "?".into() }
-        ),
-        Phase::Won => format!("SHIFT SURVIVED  ★ {}  fixes {}  prevented {}", shift.score, shift.fixes, shift.prevented),
-        Phase::Lost => format!("SLA BREACHED at {}  ★ {}", shift.time_of_day(), shift.score),
-    };
-    set(&mut texts, *hud_text, line);
-    let status = if shift.phase != Phase::Running {
-        String::new()
-    } else {
-        let here = &net.names[monkey.at];
-        let hiking = if monkey.overland && !monkey.path.is_empty() { ", hiking overland" } else { "" };
-        match (monkey.job, monkey.path.back()) {
-            (Some(j), Some(_)) => {
-                format!("🐒 → {} ({:.0}s{hiking}), then {} {}", net.names[j.node], eta(&net, &monkey, j.node), j.action.emoji(), j.action.label())
-            }
-            (Some(j), None) => format!("🐒 {} {} at {here} · {:.1}s", j.action.emoji(), j.action.label(), j.left.max(0.0)),
-            (None, Some(&dest)) => format!("🐒 → {} ({:.0}s{hiking})", net.names[dest], eta(&net, &monkey, dest)),
-            (None, None) => format!("🐒 at {here}"),
-        }
-    };
-    set(&mut texts, *monkey_text, status);
-    set(&mut texts, *next_text, next_step(&shift, &net, &monkey, &view));
-    let running = shift.phase == Phase::Running;
-    start_node.display = if running { Display::None } else { Display::Flex };
-    let want = if matches!(shift.phase, Phase::Won | Phase::Lost) { "NEW SHIFT (Enter)" } else { "START SHIFT (Enter)" };
-    set(&mut texts, *start_label, want.to_string());
-    let (node, bg) = &mut *bar;
-    node.width = percent(shift.progress() * 100.0);
-    bg.0 = if shift.sla < 30.0 { RED } else { GREEN_500 };
-    let log: Vec<&str> = shift.log.iter().filter(|(_, at)| shift.clock - at < 15.0 || !running).map(|(s, _)| s.as_str()).collect();
-    set(&mut texts, *log_text, log.join("\n"));
-}
-
-/// One line telling the player what to do now.
-fn next_step(shift: &Shift, net: &Net, monkey: &Monkey, view: &ViewState) -> String {
-    if shift.phase != Phase::Running {
-        return "▶ Enter: start the shift · arrows hop nodes · Q/E islands".into();
-    }
-    let sighted = net.sighted();
-    let visible = |i: usize| net.alerts[i].filter(|a| !a.forecast || sighted);
-    if let Some(sel) = view.selected {
-        if let Some(a) = visible(sel) {
-            if monkey.job.is_some_and(|j| j.node == sel) {
-                return "▶ 🐒 is on it. Tab: next alert, line up the next job".into();
-            }
-            let far = sel != monkey.at || !monkey.path.is_empty();
-            let swing = if far && shift.bananas >= tuning().swing_cost { " · J: swing there first (🍌)" } else { "" };
-            return if a.forecast {
-                format!("▶ Prevent it: 1-4 before the countdown ends{swing}")
-            } else {
-                format!("▶ Pick a fix: 1-4 (wrong ones cost SLA and time){swing}")
-            };
-        }
-    }
-    let worst = (0..net.alerts.len())
-        .filter_map(|i| visible(i).map(|a| (i, a, a.ttl + if a.forecast { 30.0 } else { 0.0 })))
-        .min_by(|a, b| a.2.total_cmp(&b.2));
-    match worst {
-        Some((i, a, _)) => {
-            let glyph = if a.forecast { a.failure.forecast().map_or("🔮", |f| f.0) } else { a.failure.emoji() };
-            format!("▶ {glyph} {} ({:.0}s): Space jumps there", net.names[i], a.ttl.max(0.0))
-        }
-        None => "▶ All quiet: patrol with the arrows, Q/E between islands, G to go".into(),
-    }
-}
-
-/// Open alerts, most urgent first, clickable. Rebuilt when the network changes.
-fn alert_list(
-    mut commands: Commands,
-    art: Res<Art>,
-    net: Res<Net>,
-    shift: Res<Shift>,
-    mut seen: ResMut<AlertListVersion>,
-    list: Single<(Entity, Option<&Children>), With<AlertList>>,
-) {
-    if seen.0 == Some(net.version) {
-        return;
-    }
-    seen.0 = Some(net.version);
-    let (root, children) = *list;
-    if let Some(children) = children {
-        for c in children.iter() {
-            commands.entity(c).despawn();
-        }
-    }
-    if shift.phase != Phase::Running {
-        return;
-    }
-    let sighted = net.sighted();
-    let mut rows: Vec<(usize, Alert)> = net.alerts.iter().enumerate().filter_map(|(i, a)| a.filter(|a| !a.forecast || sighted).map(|a| (i, a))).collect();
-    rows.sort_by(|a, b| a.1.forecast.cmp(&b.1.forecast).then(a.1.ttl.total_cmp(&b.1.ttl)));
-    commands.entity(root).with_children(|list| {
-        if !sighted {
-            list.spawn((
-                Node { padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.93)),
-                children![(Text::new("🔭 Watchtower down: no forecasts"), art.text(true, 11.0), TextColor(AMBER))],
-            ));
-        }
-        for (i, a) in rows.into_iter().take(7) {
-            let (glyph, title, color) = if a.forecast {
-                (a.failure.forecast().map_or("🔮", |f| f.0), "forecast", AMBER)
-            } else {
-                (a.failure.emoji(), a.failure.name(), RED_400)
-            };
-            list.spawn((
-                AlertRow(i),
-                Interaction::default(),
-                Node { column_gap: px(6), align_items: AlignItems::Center, padding: UiRect::axes(px(8), px(3)), border_radius: BorderRadius::all(px(4)), ..default() },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.93)),
-            ))
-            .with_children(|r| {
-                r.spawn((PanelTtl(i), Text::new(""), art.text(true, 11.0), TextColor(color), Node { min_width: px(48), ..default() }));
-                r.spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(12.0), ..default() }));
-                r.spawn((Text::new(format!("{title} · {}", net.names[i])), art.text(false, 11.0), TextColor(color)));
-            });
-        }
-    });
-}
-
-/// Countdown texts in the alert list and node panel.
-fn live_ttls(net: Res<Net>, mut q: Query<(&PanelTtl, &mut Text)>) {
-    for (p, mut text) in &mut q {
-        let s = net.alerts.get(p.0).copied().flatten().map_or(String::new(), |a| ttl_text(&a, net.health[p.0]));
-        if text.0 != s {
-            text.0 = s;
-        }
-    }
-}
-
-/// The node panel's top section: the open alert with its fixes (keys 1-4), or a "go here" button.
-fn swing_button(body: &mut ChildSpawnerCommands, art: &Art, shift: &Shift) {
-    let can = shift.bananas >= tuning().swing_cost;
-    let fg = if can { Color::srgb(1.0, 0.88, 0.3) } else { Color::srgb(0.45, 0.45, 0.45) };
-    body.spawn((
-        SwingButton,
-        Interaction::default(),
-        Node {
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(8), px(6)),
-            margin: UiRect::bottom(px(10)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(4)),
-            ..default()
-        },
-        BorderColor::all(fg.with_alpha(0.5)),
-        BackgroundColor(Color::srgba(0.25, 0.2, 0.0, 0.4)),
-        children![(Text::new(format!("🌿 Swing here (J) · {} of {} 🍌", tuning().swing_cost, shift.bananas)), art.text(true, 12.0), TextColor(fg))],
-    ));
-}
-
-pub fn alert_box(body: &mut ChildSpawnerCommands, art: &Art, net: &Net, shift: &Shift, node: usize) {
-    if shift.phase != Phase::Running {
-        return;
-    }
-    let Some(a) = net.alerts[node].filter(|a| !a.forecast || net.sighted()) else {
-        body.spawn((
-            GoButton,
-            Interaction::default(),
-            Node {
-                justify_content: JustifyContent::Center,
-                padding: UiRect::axes(px(8), px(6)),
-                margin: UiRect::bottom(px(10)),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(4)),
-                ..default()
-            },
-            BorderColor::all(GREEN_500.with_alpha(0.5)),
-            BackgroundColor(GREEN_900.with_alpha(0.4)),
-            children![(Text::new("🐒 Send the monkey here (G)"), art.text(true, 12.0), TextColor(GREEN_300))],
-        ));
-        swing_button(body, art, shift);
-        return;
-    };
-    swing_button(body, art, shift);
-    let (accent, bg, glyph, title, text) = if a.forecast {
-        let (g, t, _) = a.failure.forecast().unwrap_or(("🔮", "", Action::Patch));
-        (AMBER, Color::srgba(0.3, 0.2, 0.0, 0.5), g, "FORECAST ·".to_string(), t)
-    } else {
-        (RED_400, Color::srgba(0.3, 0.04, 0.04, 0.5), a.failure.emoji(), format!("INCIDENT · {} ·", a.failure.name()), a.failure.symptom())
-    };
-    body.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(px(8)),
-            margin: UiRect::bottom(px(10)),
-            row_gap: px(6),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(6)),
-            ..default()
-        },
-        BorderColor::all(if a.forecast { AMBER.with_alpha(0.6) } else { RED_500.with_alpha(0.6) }),
-        BackgroundColor(bg),
-    ))
-    .with_children(|b| {
-        b.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
-            r.spawn((Text::new(glyph), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(16.0), ..default() }));
-            r.spawn((Text::new(title), art.text(true, 12.0), TextColor(accent)));
-            r.spawn((PanelTtl(node), Text::new(""), art.text(true, 12.0), TextColor(accent)));
-        });
-        b.spawn((Text::new(text), art.text(false, 11.0), TextColor(Color::srgb(1.0, 0.9, 0.85))));
-        for (i, action) in a.options.iter().enumerate() {
-            let tried = a.tried & (1 << i) != 0;
-            let queued = net.queued == Some((node, i));
-            let fg = if tried {
-                Color::srgb(0.45, 0.45, 0.45)
-            } else if queued {
-                AMBER
-            } else {
-                GREEN_300
-            };
-            b.spawn((
-                ActionButton(i),
-                Interaction::default(),
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    padding: UiRect::axes(px(8), px(6)),
-                    border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(px(4)),
-                    ..default()
-                },
-                BorderColor::all(if tried {
-                    Color::srgba(0.4, 0.4, 0.4, 0.4)
-                } else if queued {
-                    AMBER
-                } else {
-                    GREEN_500.with_alpha(0.5)
-                }),
-                BackgroundColor(if tried { Color::NONE } else { GREEN_900.with_alpha(0.4) }),
-            ))
-            .with_children(|r| {
-                r.spawn((Text::new(format!("{}", i + 1)), art.text(true, 12.0), TextColor(fg)));
-                r.spawn((Text::new(action.emoji()), TextFont { font: art.emoji.clone().into(), font_size: FontSize::Px(14.0), ..default() }));
-                let suffix = if queued { " · 🐒 on it" } else { "" };
-                r.spawn((Text::new(format!("{} · {:.0}s{suffix}", action.label(), action.secs())), art.text(false, 12.0), TextColor(fg)));
-            });
-        }
-    });
 }

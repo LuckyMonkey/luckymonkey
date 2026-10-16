@@ -13,66 +13,13 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Deserialize)]
-pub struct ForecastDef {
-    pub emoji: String,
-    pub text: String,
-    pub prevent: String,
-}
-
-#[derive(Deserialize)]
-pub struct FailureDef {
-    pub emoji: String,
-    pub name: String,
-    pub symptom: String,
-    pub fix: String,
-    pub ttl: f32,
-    #[serde(default)]
-    pub forecast: Option<ForecastDef>,
-}
-
-#[derive(Deserialize)]
-pub struct ActionDef {
-    pub emoji: String,
-    pub label: String,
-    pub secs: f32,
-}
-
+/// tuning.json: the simulation rules (sim.rs) plus a few presentation values.
 #[derive(Deserialize)]
 pub struct Tuning {
-    pub shift_secs: f32,
-    pub start_sla: f32,
-    pub link_speed: f32,
-    pub hike_speed: f32,
-    pub drain_degraded: f32,
-    pub drain_down: f32,
-    pub wrong_fix_sla: f32,
-    pub wrong_fix_ttl: f32,
-    pub down_ttl: f32,
-    pub disparity_loss: f32,
-    pub down_work_mult: f32,
-    pub first_incident: f32,
-    pub first_forecast: f32,
-    /// [morning, reduction by evening]: interval = a - b * progress
-    pub incident_every: [f32; 2],
-    pub forecast_every: [f32; 2],
-    /// [min, max] seconds
-    pub forecast_ttl: [f32; 2],
+    #[serde(flatten)]
+    pub rules: crate::sim::Rules,
     pub lightning_range: f32,
     pub lightning_chance: f32,
-    pub points_fix: f32,
-    pub points_per_ttl_sec: f32,
-    pub points_prevent: f32,
-    pub survive_mult: f32,
-    pub bananas_start: u32,
-    pub banana_fix: u32,
-    pub banana_prevent: u32,
-    pub swing_cost: u32,
-    pub swing_speed: f32,
-    pub combo_step: f32,
-    pub combo_max: f32,
-    pub failures: HashMap<String, FailureDef>,
-    pub actions: HashMap<String, ActionDef>,
     pub node_colors: HashMap<String, String>,
 }
 

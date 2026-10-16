@@ -364,6 +364,8 @@ fn spawn_terrain(
     }
     let (w0, w1) = cell_uv(WHITE_CELL);
     let white = [(w0 + w1) / 2.0; 4];
+    let nodes: Vec<(i32, i32)> = world.nodes.iter().map(|n| (n.position.x.round() as i32, n.position.y.round() as i32)).collect();
+    let near_node = |x: i32, y: i32| nodes.iter().any(|&(nx, ny)| (nx - x).abs() + (ny - y).abs() <= 2);
     for (row, cells) in rows {
         let mut buf = MeshBuf::default();
         for (x, y, t) in cells {
@@ -389,6 +391,10 @@ fn spawn_terrain(
                 let d = Vec2::Y * dr;
                 let top = wall.lighter(0.03);
                 buf.quad4([s, e, e - d, s - d], white, [top, top, shade(top, dr), shade(top, dr)]);
+            }
+            if !near_node(x, y) {
+                vines(&mut buf, t, x, y, (w, s), dl, world.tiles.contains_key(&(x, y + 1)), 0);
+                vines(&mut buf, t, x, y, (s, e), dr, world.tiles.contains_key(&(x + 1, y)), 1);
             }
             // The sprites are 32px iso blocks: top diamond at rows 8..24, an 8px side
             // skirt below. Drawn at 2x, the diamond lands exactly on the grid cell.
@@ -421,6 +427,63 @@ fn spawn_terrain(
             MeshMaterial2d(material.clone()),
             Transform::from_xyz(0.0, 0.0, row as f32),
         ));
+    }
+}
+
+const VINE_STEM: Color = Color::srgb(0.15, 0.36, 0.11);
+const VINE_LEAF: Color = Color::srgb(0.29, 0.56, 0.19);
+const VINE_LEAF2: Color = Color::srgb(0.43, 0.70, 0.25);
+
+/// Little pixel vines hanging from exposed island edges: a 2px stem that jogs
+/// sideways now and then, small leaves on alternating sides, a curl at the tip.
+/// Placement is hashed from the cell, sparse and clustered (lush cells only),
+/// and the quads go into the row's terrain mesh: no extra entities, no cost per frame.
+fn vines(buf: &mut MeshBuf, t: Tile, x: i32, y: i32, edge: (Vec2, Vec2), depth: f32, covered: bool, face: i32) {
+    if covered || depth < ELEV || !matches!(t.kind, kind::GRASS | kind::PLATFORM | kind::TEMPLE) {
+        return;
+    }
+    // Clusters: a coarse hash picks lush stretches, a fine one picks cells within them.
+    let lush = cell_hash(x.div_euclid(3) * 5 + face, y.div_euclid(3) * 9 + 1) < 0.5;
+    let pick = cell_hash(x * 13 + 5 + face * 7, y * 7 + 11);
+    if !lush || pick > 0.5 {
+        return;
+    }
+    let white = [{
+        let (a, b) = cell_uv(WHITE_CELL);
+        (a + b) / 2.0
+    }; 4];
+    let snap = |v: Vec2| Vec2::new((v.x / 2.0).round() * 2.0, (v.y / 2.0).round() * 2.0);
+    let rect = |buf: &mut MeshBuf, at: Vec2, w: f32, h: f32, c: Color| {
+        let at = snap(at);
+        buf.quad([at, at + Vec2::X * w, at + Vec2::new(w, -h), at - Vec2::Y * h], white, c);
+    };
+    let strands = 1 + (pick * 7.0) as i32 % 2;
+    for k in 0..strands {
+        let r = cell_hash(x * 3 + k * 17 + face, y * 5 + k * 29);
+        let f = 0.18 + 0.64 * r;
+        let mut at = snap(edge.0.lerp(edge.1, f));
+        let len = (depth * (0.5 + 0.5 * r) + 6.0 + 22.0 * cell_hash(x + k * 31, y - face * 13)).min(depth + 26.0);
+        let mut y_off = 0.0;
+        let mut seg = 0;
+        while y_off < len {
+            let h = 6.0f32.min(len - y_off);
+            rect(buf, at - Vec2::Y * y_off, 2.0, h, VINE_STEM);
+            if seg % 2 == 0 && y_off + 4.0 < len {
+                let side = if (seg / 2 + k) % 2 == 0 { -4.0 } else { 2.0 };
+                let leaf = if cell_hash(x * 7 + seg, y * 3 + k) < 0.5 { VINE_LEAF } else { VINE_LEAF2 };
+                rect(buf, at + Vec2::new(side, -(y_off + 2.0)), 4.0, 2.0, leaf);
+            }
+            y_off += 6.0;
+            seg += 1;
+            // Jog sideways now and then.
+            if cell_hash(x * 11 + seg * 3 + k, y * 13 - seg) < 0.3 {
+                at.x += if face == 0 { -2.0 } else { 2.0 };
+            }
+        }
+        // Curl at the tip.
+        let dir = if k % 2 == 0 { 2.0 } else { -2.0 };
+        rect(buf, at + Vec2::new(dir, -len), 2.0, 2.0, VINE_STEM);
+        rect(buf, at + Vec2::new(dir * 2.0, -(len - 2.0)), 2.0, 2.0, VINE_LEAF);
     }
 }
 

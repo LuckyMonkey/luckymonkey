@@ -13,6 +13,13 @@ only serves the page that hosts its canvas (`app/page.tsx`) and the built
 simulation, the interface, build/deploy/test, outside assets and licences,
 decisions and known issues, and how to extend it.
 
+## On-call design
+
+The simulation (incident director, root causes vs impacts, crew, Time to Loss) is
+`game/src/sim.rs`, with no Bevy; tests and balancing bots live in `game/simtest/`
+(run on fridge: `cd game/simtest && cargo test && cargo run --release --bin balance`).
+Design notes and measurements: `docs/oncall-design.md`.
+
 ## Live data: edit JSON, no rebuild
 
 The world, the critters and all gameplay tuning are plain JSON in `game/data/`:
