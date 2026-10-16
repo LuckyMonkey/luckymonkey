@@ -96,7 +96,7 @@ the welcome screen.
 - **Incident kinds:** `ddos`, `worm`, `disparity`, `deploy`, `migration`,
   `lightning`, `cert`, `leak`, `disk`.
 - **Forecast kinds:** `cert`, `deploy`, `disk`, `worm`.
-- **Node ids:** see [the node table](assets.md#what_is_what_the_nodes).
+- **Node ids:** see [the node table](assets.md#what_is_whatthe_nodes).
 - A staged problem gets 25 s of stage time before the day's own trouble starts.
 
 These links are why every page in these docs can say "▶ live". They are also how

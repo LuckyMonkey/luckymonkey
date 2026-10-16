@@ -16,7 +16,7 @@ downloads about 6.7 MB the first time.)
 The world is a set of terrain islands floating in a dark void. The void is a
 [tiled grid pattern](source/world.md#fn_spawn_backdrop) with faint teal
 [edge islands](source/world.md#fn_spawn_islands) hinting at more network beyond.
-The coloured cards are the 28 [nodes](assets.md#what_is_what_the_nodes). The pale
+The coloured cards are the 28 [nodes](assets.md#what_is_whatthe_nodes). The pale
 dashes between them are [data frames streaming along the links](simulation.md#visual_feedback_driven_by_the_model).
 ▶ [live](https://go.fridge.run/luckymonkey#zoom=0.5)
 
@@ -65,7 +65,7 @@ rarely read". Data stores like this one suffer
 ![The Volcano Core Processor on a raised lava field studded with crystals](img/volcano.png)
 
 The Volcano Core Processor: "processes data at extreme speeds but occasionally
-erupts". Its platform is lava tiles from the [atlas](world.md#tiles_and_the_alignment_fix);
+erupts". Its platform is lava tiles from the [atlas](world.md#tiles_and_the_alignment_bug_that_started_it_all);
 the crystals are emoji decorations.
 ▶ [live](https://go.fridge.run/luckymonkey#node=volcano-core&zoom=1.2)
 
@@ -75,7 +75,7 @@ the crystals are emoji decorations.
 
 A load balancer standing in the river: "frames hop from pad to pad; the pads
 take turns so no single one sinks". It is one of
-[seven places added](overview.md#history) so the network reads like real
+[seven places added](overview.md#historythree_renderers_in_three_weeks) so the network reads like real
 infrastructure.
 ▶ [live](https://go.fridge.run/luckymonkey#node=lb-lilypads&zoom=1.6)
 
@@ -124,7 +124,7 @@ Both *Roll back* and *Fall forward* are always offered for a bad deploy. Read th
 symptom: this deploy **migrated the schema**, so the old version cannot read the
 new tables, and rolling back would make things worse. This is the lesson the
 owner asked for ("fall forward").
-[Why](failures.md#bad_deploy_roll_back_or_fall_forward).
+[Why](failures.md#bad_deployroll_back_or_fall_forward).
 ▶ [live](https://go.fridge.run/luckymonkey#node=main-router&incident=migration)
 
 ## Trouble with data: replica disparity

@@ -17,7 +17,7 @@ Terms used across these pages, each with where to read more.
 | **TTL** | "Time to live": seconds left on an alert's countdown | [`struct Alert`](source/ops.md#struct_alert) |
 | **Unstable / down** | A node with an open incident / one whose countdown ran out | [`enum Health`](source/ops.md#enum_health) |
 | **The monkey** 🐒 | You: the only one who can fix things, and only where it stands | [You are the monkey](gameplay.md#you_are_the_monkey) |
-| **Hiking** | Walking cross-country when no link route exists (slow) | [Routing](simulation.md#routing_how_the_monkey_finds_its_way) |
+| **Hiking** | Walking cross-country when no link route exists (slow) | [Routing](simulation.md#routinghow_the_monkey_finds_its_way) |
 | **Watchtower** 🔭 | The monitoring node; forecasts need it up | [Tour](tour.md#the_canopy_watchtower) |
 | **Data frames** | The little boxes streaming along links and rivers | [Visual feedback](simulation.md#visual_feedback_driven_by_the_model) |
 | **Deep link** | A URL `#hash` that opens the game at a node, with trouble staged | [Deep links](interface.md#deep_links) |
@@ -32,8 +32,8 @@ Terms used across these pages, each with where to read more.
 | **Worm** | Malware that copies itself across a network on its own | [Wikipedia](https://en.wikipedia.org/wiki/Computer_worm) · [in the game](failures.md#worm) |
 | **Quarantine** | Isolating a host so a problem cannot spread | [Security+: Incident response](https://go.fridge.run/certs/learn/secplus?n=4) |
 | **Replica / split-brain** | Copies of data; split-brain is when copies diverge | [Wikipedia](https://en.wikipedia.org/wiki/Split-brain_(computing)) · [in the game](failures.md#replica_disparity) |
-| **Rollback** | Returning to the previous version | [in the game](failures.md#bad_deploy_roll_back_or_fall_forward) |
-| **Fall forward / roll forward** | Fixing a bad release with a new one, because going back is impossible (e.g. after a schema migration) | [in the game](failures.md#bad_deploy_roll_back_or_fall_forward) |
+| **Rollback** | Returning to the previous version | [in the game](failures.md#bad_deployroll_back_or_fall_forward) |
+| **Fall forward / roll forward** | Fixing a bad release with a new one, because going back is impossible (e.g. after a schema migration) | [in the game](failures.md#bad_deployroll_back_or_fall_forward) |
 | **Schema migration** | A change to the shape of stored data; often one-way | [Data & Databases course](https://go.fridge.run/certs/t/data) |
 | **Canary release** | Sending a new version to a small slice of traffic first | [Martin Fowler](https://martinfowler.com/bliki/CanaryRelease.html) |
 | **Failover** | Switching to standby capacity when the primary fails | [Wikipedia](https://en.wikipedia.org/wiki/Failover) |
@@ -52,12 +52,12 @@ Terms used across these pages, each with where to read more.
 | **Plugin** | A module's registration function | [How the app is assembled](engine.md#how_the_app_is_assembled) |
 | **Schedule** | When systems run (Startup, Update…) | [When each system runs](engine.md#when_each_system_runs) |
 | **WebAssembly (wasm)** | Compact binary code browsers run fast | [webassembly.org](https://webassembly.org) |
-| **wasm-bindgen** | Generates the JavaScript glue that loads the wasm | [GitHub](https://github.com/wasm-bindgen/wasm-bindgen) · [Build](build-deploy.md#the_toolchain) |
+| **wasm-bindgen** | Generates the JavaScript glue that loads the wasm | [GitHub](https://github.com/wasm-bindgen/wasm-bindgen) · [Build](build-deploy.md#the_toolchain_on_fridge_user_fridge_incargo) |
 | **WebGL2** | The browser's GPU drawing API | [MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext) |
 | **Isometric projection** | Drawing a grid at an angle so it looks 3D without perspective | [Wikipedia](https://en.wikipedia.org/wiki/Isometric_video_game_graphics) · [the maths](world.md#the_isometric_maths) |
-| **Texture atlas** | Many small pictures packed into one image | [Wikipedia](https://en.wikipedia.org/wiki/Texture_atlas) · [tiles](world.md#tiles_and_the_alignment_fix) |
+| **Texture atlas** | Many small pictures packed into one image | [Wikipedia](https://en.wikipedia.org/wiki/Texture_atlas) · [tiles](world.md#tiles_and_the_alignment_bug_that_started_it_all) |
 | **Mesh** | Triangles with positions, texture coordinates and colours | [terrain mesh](world.md#the_terrain_mesh) |
-| **z-order** | Draw order in 2D: higher z on top | [depth](engine.md#rendering_depth_in_a_2d_isometric_world) |
+| **z-order** | Draw order in 2D: higher z on top | [depth](engine.md#renderingdepth_in_a_2d_isometric_world) |
 | **Dijkstra's algorithm** | Shortest path on a weighted graph | [Wikipedia](https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm) · [`fn route`](source/ops.md#fn_route) · [Algorithms course](https://go.fridge.run/certs/t/algo) |
 | **xorshift** | A tiny fast random-number generator | [Wikipedia](https://en.wikipedia.org/wiki/Xorshift) · [`struct Rng`](source/main.md#struct_rng) |
 | **Font subset** | A font cut down to only the characters used | [`subset-fonts.py`](source/subset-fonts.md) |

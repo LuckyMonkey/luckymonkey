@@ -16,7 +16,7 @@ to look at first when three things break at once.
 
 The game turns that into something you can play in a lunch break:
 
-- **The network is a jungle.** 28 nodes ([the full list](assets.md#what_is_what_the_nodes))
+- **The network is a jungle.** 28 nodes ([the full list](assets.md#what_is_whatthe_nodes))
   sit on terrain islands floating in a dark void: a router (📡), firewalls (🔥),
   a database (🗄️), a DNS shrine (⛩️), a load balancer standing on lily pads in the
   river (🪷), a monitoring watchtower (🔭), a temple pyramid with the Lucky Monkey
@@ -97,7 +97,7 @@ The costs were known up front:
 | `game/src/ops.rs` | **the game**: failures, network, shift, monkey, HUD | [source](source/ops.md) · [explained](simulation.md) |
 | `game/src/link.rs` | deep links from the URL hash | [source](source/link.md) |
 | `game/Cargo.toml` | Rust crate: Bevy features, release profile | [source](source/cargo-toml.md) |
-| `lib/world-data.ts` | **the map source** (TypeScript generators) | [source](source/world-data.md) · [explained](world.md#data_pipeline_typescript_in_json_in_the_wasm) |
+| `lib/world-data.ts` | **the map source** (TypeScript generators) | [source](source/world-data.md) · [explained](world.md#from_typescript_to_the_wasmthe_map_s_journey) |
 | `tools/*` | export, textures, deploy, fonts, browser test, these source pages | [deploy](source/deploy-sh.md) · [textures](source/make-textures.md) · [export](source/export-world.md) |
 | `app/page.tsx` | host page | [source](source/page-tsx.md) |
 | `public/sprites/` | the original 32 px tile pictures | [assets](assets.md#images) |

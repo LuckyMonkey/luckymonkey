@@ -66,7 +66,9 @@ only where it stands.
 alerts, the question is *which first*, and whether a down node now blocks your
 route to the others. That is the real job.
 
-## Incidents (reactive) 🚨
+## Incidents (reactive)
+
+🚨
 
 ![A DDoS incident: red frames, the panel with symptoms and fixes](img/ddos.png)
 
@@ -91,7 +93,9 @@ Countdowns ([`Failure::ttl`](source/ops.md#impl_failure)):
 
 What each one means and which fix is right: [Failure types](failures.md).
 
-## Forecasts (proactive) 🔮
+## Forecasts (proactive)
+
+🔮
 
 ![An amber forecast on the Auth Gate: the certificate is about to expire](img/forecast.png)
 
@@ -129,7 +133,7 @@ The panel on the right shows the symptoms and **four options** on keys **1-4**
 
 - Exactly one option is right.
 - For a bad deploy, both *Roll back* and *Fall forward* are always offered,
-  because telling them apart is the lesson ([why](failures.md#bad_deploy_roll_back_or_fall_forward)).
+  because telling them apart is the lesson ([why](failures.md#bad_deployroll_back_or_fall_forward)).
 - A **wrong** fix costs the time it took, **2% SLA**, and (for incidents)
   **8 s** off the countdown. The option is greyed out so you cannot repeat it.
 

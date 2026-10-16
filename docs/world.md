@@ -104,7 +104,7 @@ For each cell it adds:
 
 Taller tiles are tinted slightly brighter ([`fn top_tint`](source/world.md#fn_top_tint)),
 so terraces read at a glance. Then each row's mesh is placed at z = x + y.
-[Why that works](engine.md#rendering_depth_in_a_2d_isometric_world).
+[Why that works](engine.md#renderingdepth_in_a_2d_isometric_world).
 
 ## Clean-ups applied when loading
 

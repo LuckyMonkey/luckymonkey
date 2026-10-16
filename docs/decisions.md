@@ -28,7 +28,7 @@ Why things are the way they are. Newest concerns first in each section.
 
 ## Bugs found and fixed in the port
 
-- **Tile alignment.** ([details](world.md#tiles_and_the_alignment_fix)) The Pixi version drew the 32 px isometric *block* sprites
+- **Tile alignment.** ([details](world.md#tiles_and_the_alignment_bug_that_started_it_all)) The Pixi version drew the 32 px isometric *block* sprites
   squashed into 64×32 rectangles, so diamonds never met. Now drawn at 2× as
   blocks; the diamond lands on the grid.
 - **Upside-down pyramid.** ([code](source/world.md#fn_plugin), ▶ [see it](https://go.fridge.run/luckymonkey#node=monkey-statue&zoom=1.1)) The temple generator gave the widest layer the

@@ -22,7 +22,7 @@ real systems thinking:
   [DDoS floods](failures.md#ddos_stampede),
   [worms](failures.md#worm),
   [replicas that disagree](failures.md#replica_disparity),
-  and [deploys that can be rolled back, and deploys that cannot](failures.md#bad_deploy_roll_back_or_fall_forward).
+  and [deploys that can be rolled back, and deploys that cannot](failures.md#bad_deployroll_back_or_fall_forward).
 
 You walk the network, read the symptoms, pick the fix, and race the countdown.
 Some problems you can see coming and prevent. Others you can only react to.

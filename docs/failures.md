@@ -28,8 +28,8 @@ fridge itself:
 | 🐘 [DDoS stampede](#ddos_stampede) | 🛡️ Rate-limit at the firewall | no | yes, once down | 30 s |
 | 🐛 [Worm](#worm) | 🚧 Quarantine the node | yes: 🧬 → 🩹 Patch | yes, every countdown | 35 s |
 | ⚖️ [Replica disparity](#replica_disparity) | 🔁 Resync from primary | no | no (but data is lost) | 50 s |
-| 📦 [Bad deploy](#bad_deploy_roll_back_or_fall_forward) | ⏪ Roll back | yes: 📅 → 🐤 Canary | no | 45 s |
-| 📦 [Bad deploy + migration](#bad_deploy_roll_back_or_fall_forward) | ⏩ Fall forward (hotfix) | yes: 📅 → 🐤 Canary | no | 45 s |
+| 📦 [Bad deploy](#bad_deployroll_back_or_fall_forward) | ⏪ Roll back | yes: 📅 → 🐤 Canary | no | 45 s |
+| 📦 [Bad deploy + migration](#bad_deployroll_back_or_fall_forward) | ⏩ Fall forward (hotfix) | yes: 📅 → 🐤 Canary | no | 45 s |
 | ⚡ [Lightning strike](#lightning_strike) | 🔌 Fail over to standby | no (weather) | no | 28 s |
 | 🔐 [Expired certificate](#expired_certificate) | 🔑 Rotate the certificate | yes: 🔐 → 🔑 Rotate | no | 40 s |
 | 🍌 [Memory leak](#memory_leak) | 🔄 Restart the service | no | no | 45 s |
