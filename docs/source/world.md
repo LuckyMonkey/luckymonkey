@@ -4,7 +4,7 @@ title: Lucky Monkey source - world.rs
 
 # Source: game/src/world.rs
 
-**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 487 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 495 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -18,6 +18,7 @@ taller terrain in front of it.
 
 | Item | What it is |
 |---|---|
+| [type WorldFileCheck](#type_worldfilecheck) | Used by data.rs to check a fetched world.json parses before trusting it. |
 | [const TILE_W](#const_tile_w) |  |
 | [const TILE_H](#const_tile_h) |  |
 | [const ELEV](#const_elev) | Screen pixels per unit of height. |
@@ -72,6 +73,14 @@ use crate::Art;
 ```
 
 ## Code
+
+### type WorldFileCheck
+
+Used by data.rs to check a fetched world.json parses before trusting it.
+
+```rust
+pub(crate) type WorldFileCheck = WorldFile;
+```
 
 ### const TILE_W
 
@@ -136,7 +145,7 @@ pub mod kind {
 
 ```rust
 #[derive(Deserialize)]
-struct WorldFile {
+pub(crate) struct WorldFile {
     tiles: Vec<TileIn>,
     nodes: Vec<NodeData>,
     decorations: Vec<Deco>,
@@ -313,7 +322,7 @@ const EDGE_ISLANDS: [(i32, i32, i32); 10] = [
 
 ```rust
 pub fn plugin(app: &mut App) {
-    let file: WorldFile = serde_json::from_str(include_str!("../assets/world.json")).expect("world.json");
+    let file: WorldFile = serde_json::from_str(crate::data::world_json()).expect("world.json");
     // Several generators write the same cell; keep the tallest so stacked
     // platforms read as solid ground instead of whichever was written last.
     let mut tiles: HashMap<(i32, i32), Tile> = HashMap::new();
@@ -469,12 +478,15 @@ struct MeshBuf {
 ```rust
 impl MeshBuf {
     fn quad(&mut self, v: [Vec2; 4], uv: [Vec2; 4], c: Color) {
+        self.quad4(v, uv, [c; 4]);
+    }
+    /// A quad with its own colour at each corner (gradients).
+    fn quad4(&mut self, v: [Vec2; 4], uv: [Vec2; 4], c: [Color; 4]) {
         let base = self.pos.len() as u32;
-        let c = c.to_linear().to_f32_array();
         for i in 0..4 {
             self.pos.push([v[i].x, v[i].y, 0.0]);
             self.uv.push(uv[i].into());
-            self.col.push(c);
+            self.col.push(c[i].to_linear().to_f32_array());
         }
         self.idx.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -517,24 +529,45 @@ fn spawn_terrain(
                 None => (t.height + BASE) * ELEV,
             };
             let wall = wall_color(t.kind);
+            // Walls are lit at the lip and fall into shadow toward the bottom; deep
+            // drops (island edges) fade almost to black so islands float.
+            let shade = |c: Color, depth: f32| c.darker((0.12 + depth / (ELEV * 6.0)).min(0.42));
             let dl = drop(x, y + 1);
             if dl > 0.0 {
                 let d = Vec2::Y * dl;
-                buf.quad([w, s, s - d, w - d], white, wall.darker(0.18));
+                let top = wall.darker(0.16);
+                buf.quad4([w, s, s - d, w - d], white, [top, top, shade(top, dl), shade(top, dl)]);
             }
             let dr = drop(x + 1, y);
             if dr > 0.0 {
                 let d = Vec2::Y * dr;
-                buf.quad([s, e, e - d, s - d], white, wall);
+                let top = wall.lighter(0.03);
+                buf.quad4([s, e, e - d, s - d], white, [top, top, shade(top, dr), shade(top, dr)]);
             }
             // The sprites are 32px iso blocks: top diamond at rows 8..24, an 8px side
             // skirt below. Drawn at 2x, the diamond lands exactly on the grid cell.
             let (a, b) = cell_uv(atlas_cell(t, x, y));
             let (tl, br) = (c + Vec2::new(-32.0, 32.0), c + Vec2::new(32.0, -32.0));
-            buf.quad(
+            // Each top gets a little brightness variation, and a soft contact shadow
+            // on its back edge when a taller block stands behind it.
+            let jitter = 1.0 + (cell_hash(x * 31 + 7, y * 17 + 3) - 0.5) * 0.08;
+            let taller = |nx: i32, ny: i32| world.tiles.get(&(nx, ny)).is_some_and(|o| o.height > t.height);
+            let (back_l, back_r) = (taller(x - 1, y), taller(x, y - 1));
+            let base = top_tint(t).to_srgba();
+            let tint = |k: f32| Color::srgba((base.red * k).min(1.0), (base.green * k).min(1.0), (base.blue * k).min(1.0), base.alpha);
+            let lit = tint(jitter);
+            let dim = tint(jitter * 0.72);
+            // Corners: top-left, top-right, bottom-right, bottom-left of the 2x quad.
+            let corners = [
+                if back_l || back_r { dim } else { lit },
+                if back_r { dim } else { lit },
+                lit,
+                if back_l { dim } else { lit },
+            ];
+            buf.quad4(
                 [tl, Vec2::new(br.x, tl.y), br, Vec2::new(tl.x, br.y)],
                 [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)],
-                top_tint(t),
+                corners,
             );
         }
         commands.spawn((
@@ -648,31 +681,7 @@ fn spawn_decorations(mut commands: Commands, world: Res<World>, decos: Res<Decos
 
 ```rust
 pub fn node_color(kind: &str) -> Color {
-    let hex = match kind {
-        "monkey" => 0x22c55e,
-        "banana-cache" => 0xfacc15,
-        "temple" => 0x15803d,
-        "server" => 0x4b5563,
-        "river" => 0x0ea5e9,
-        "router" => 0xa855f7,
-        "firewall" => 0xef4444,
-        "database" => 0x3b82f6,
-        "volcano" => 0xdc2626,
-        "ai-core" => 0x8b5cf6,
-        "vault" => 0x6366f1,
-        "switch" => 0x14b8a6,
-        "terminal" => 0x64748b,
-        "lizard" => 0x84cc16,
-        "lake" => 0x0284c7,
-        "dns" => 0xb91c1c,
-        "balancer" => 0xdb2777,
-        "queue" => 0x0891b2,
-        "monitor" => 0xd97706,
-        "auth" => 0x7c3aed,
-        "cdn" => 0x059669,
-        _ => 0x6b7280,
-    };
-    Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
+    crate::data::tuning().node_colors.get(kind).map_or(Color::srgb(0.42, 0.45, 0.5), |h| crate::data::hex_color(h))
 }
 ```
 
@@ -695,6 +704,11 @@ fn spawn_nodes(mut commands: Commands, world: Res<World>, art: Res<Art>) {
         } else {
             node.name.clone()
         };
+        // A soft shadow on the ground grounds the floating card.
+        commands.spawn((
+            Sprite { image: art.dot.clone(), color: Color::srgba(0.0, 0.0, 0.0, 0.45), custom_size: Some(Vec2::new(86.0, 30.0)), ..default() },
+            Transform::from_translation((at - Vec2::Y * 38.0).extend(NODE_Z - 3.0)),
+        ));
         commands
             .spawn((
                 NodeCard(i),

@@ -13,6 +13,22 @@ only serves the page that hosts its canvas (`app/page.tsx`) and the built
 simulation, the interface, build/deploy/test, outside assets and licences,
 decisions and known issues, and how to extend it.
 
+## Live data: edit JSON, no rebuild
+
+The world, the critters and all gameplay tuning are plain JSON in `game/data/`:
+
+- `world.json`: tiles, nodes (positions, connections, names, emoji), decorations, rivers
+- `npcs.json`: critters
+- `tuning.json`: every failure (text, emoji, fix, countdown, forecast), every action
+  (label, emoji, seconds), speeds, SLA drain, spawn rates, scoring, node colours
+
+Edit, then `tools/deploy.sh data`: live in seconds, no Rust build, no restart.
+Reload the page. The page fetches the files at startup (`app/page.tsx`); the game reads
+them in `game/src/data.rs`. A broken or missing file falls back to the built-in copy,
+and partial `tuning.json` files are merged over it, so a bad edit can't take the game down.
+Any emoji works (the full emoji font ships with the game). Code changes still need
+`tools/deploy.sh` (about 4 minutes).
+
 ## Build and deploy
 
 ```sh

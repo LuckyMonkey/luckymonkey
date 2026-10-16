@@ -4,6 +4,7 @@
 //! web build is just `luckymonkey.js` + `luckymonkey_bg.wasm`.
 
 mod clouds;
+mod data;
 mod link;
 mod npc;
 mod ops;
@@ -40,6 +41,8 @@ pub struct Art {
     pub dot: Handle<Image>,
     /// A data frame: outlined box with a header bar (tinted per use).
     pub frame: Handle<Image>,
+    /// Dark-edged vignette laid over the whole view.
+    pub vignette: Handle<Image>,
     /// A full-radius pill (cloud body) and its 1px-at-1x outline.
     pub pill: Handle<Image>,
     pub pill_border: Handle<Image>,
@@ -138,6 +141,28 @@ fn pill(images: &mut Assets<Image>, outline: bool) -> Handle<Image> {
     images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
 }
 
+fn vignette(images: &mut Assets<Image>) -> Handle<Image> {
+    const N: u32 = 128;
+    let mut data = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let p = (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) / N as f32 - 0.5) * 2.0;
+            let d = (p.length() - 0.55).max(0.0) / 0.9;
+            data.extend([0, 0, 0, ((d * d).min(1.0) * 200.0) as u8]);
+        }
+    }
+    let size = Extent3d { width: N, height: N, depth_or_array_layers: 1 };
+    images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
+}
+
+fn spawn_vignette(mut commands: Commands, art: Res<Art>) {
+    commands.spawn((
+        ImageNode::new(art.vignette.clone()),
+        Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
+        GlobalZIndex(-50),
+    ));
+}
+
 fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts: ResMut<Assets<Font>>) {
     let font = |b: &[u8]| Font::from_bytes(b.to_vec());
     commands.insert_resource(Art {
@@ -150,6 +175,7 @@ fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts
         card_border: png(&mut images, include_bytes!("../assets/card_border.png"), ImageSampler::linear()),
         dot: dot(&mut images),
         frame: frame(&mut images),
+        vignette: vignette(&mut images),
         pill: pill(&mut images, false),
         pill_border: pill(&mut images, true),
         grid: png(&mut images, include_bytes!("../../public/images/grid_background.png"), ImageSampler::linear()),
@@ -174,6 +200,7 @@ fn main() {
         .insert_resource(Rng(0x9e37_79b9_7f4a_7c15))
         .init_state::<Screen>()
         .add_systems(PreStartup, load_art)
+        .add_systems(Startup, spawn_vignette)
         .add_plugins((link::plugin, world::plugin, water::plugin, npc::plugin, clouds::plugin, view::plugin, ui::plugin, ops::plugin))
         .run();
 }

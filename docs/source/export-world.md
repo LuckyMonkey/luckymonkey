@@ -25,7 +25,8 @@ const load = (rel) => {
 }
 const { worldData, riverLines } = load("lib/world-data.ts")
 const { initialNPCs } = load("lib/npc-data.ts")
-const out = path.join(root, "game/assets")
+// WARNING: overwrites game/data/world.json + npcs.json, which are now the editable source.
+const out = path.join(root, "game/data")
 const tiles = worldData.chunks.flatMap((c) => c.tiles).map(({ x, y, type, height, isWaterfall, isLagoon }) => ({ x, y, type, height, ...(isWaterfall && { fall: true }), ...(isLagoon && { lagoon: true }) }))
 const line = (ps) => ps.map(({ x, y, height }) => ({ x, y, height: height || 0 }))
 const world = { seed: worldData.meta.seed, tiles, nodes: worldData.nodes, decorations: worldData.decorations, streams: [line(riverLines.main), line(riverLines.digital)] }

@@ -4,7 +4,7 @@ title: Lucky Monkey source - main.rs
 
 # Source: game/src/main.rs
 
-**App setup: the window and canvas, shared fonts and textures (`Art`), procedural textures, the random generator, screens.** Explained in [engine](../engine.md). 179 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/main.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**App setup: the window and canvas, shared fonts and textures (`Art`), procedural textures, the random generator, screens.** Explained in [engine](../engine.md). 206 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/main.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -18,6 +18,7 @@ web build is just `luckymonkey.js` + `luckymonkey_bg.wasm`.
 | Item | What it is |
 |---|---|
 | [mod clouds](#mod_clouds) |  |
+| [mod data](#mod_data) |  |
 | [mod link](#mod_link) |  |
 | [mod npc](#mod_npc) |  |
 | [mod ops](#mod_ops) |  |
@@ -34,6 +35,8 @@ web build is just `luckymonkey.js` + `luckymonkey_bg.wasm`.
 | [fn dot](#fn_dot) |  |
 | [fn frame](#fn_frame) |  |
 | [fn pill](#fn_pill) | Pill at 2x (320x150): solid, or just its outline. Edges are anti-aliased. |
+| [fn vignette](#fn_vignette) |  |
+| [fn spawn_vignette](#fn_spawn_vignette) |  |
 | [fn load_art](#fn_load_art) |  |
 | [fn main](#fn_main) |  |
 
@@ -52,6 +55,12 @@ use bevy::prelude::*;
 
 ```rust
 mod clouds;
+```
+
+### mod data
+
+```rust
+mod data;
 ```
 
 ### mod link
@@ -127,6 +136,8 @@ pub struct Art {
     pub dot: Handle<Image>,
     /// A data frame: outlined box with a header bar (tinted per use).
     pub frame: Handle<Image>,
+    /// Dark-edged vignette laid over the whole view.
+    pub vignette: Handle<Image>,
     /// A full-radius pill (cloud body) and its 1px-at-1x outline.
     pub pill: Handle<Image>,
     pub pill_border: Handle<Image>,
@@ -256,6 +267,36 @@ fn pill(images: &mut Assets<Image>, outline: bool) -> Handle<Image> {
 }
 ```
 
+### fn vignette
+
+```rust
+fn vignette(images: &mut Assets<Image>) -> Handle<Image> {
+    const N: u32 = 128;
+    let mut data = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let p = (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) / N as f32 - 0.5) * 2.0;
+            let d = (p.length() - 0.55).max(0.0) / 0.9;
+            data.extend([0, 0, 0, ((d * d).min(1.0) * 200.0) as u8]);
+        }
+    }
+    let size = Extent3d { width: N, height: N, depth_or_array_layers: 1 };
+    images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
+}
+```
+
+### fn spawn_vignette
+
+```rust
+fn spawn_vignette(mut commands: Commands, art: Res<Art>) {
+    commands.spawn((
+        ImageNode::new(art.vignette.clone()),
+        Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
+        GlobalZIndex(-50),
+    ));
+}
+```
+
 ### fn load_art
 
 ```rust
@@ -271,6 +312,7 @@ fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts
         card_border: png(&mut images, include_bytes!("../assets/card_border.png"), ImageSampler::linear()),
         dot: dot(&mut images),
         frame: frame(&mut images),
+        vignette: vignette(&mut images),
         pill: pill(&mut images, false),
         pill_border: pill(&mut images, true),
         grid: png(&mut images, include_bytes!("../../public/images/grid_background.png"), ImageSampler::linear()),
@@ -299,6 +341,7 @@ fn main() {
         .insert_resource(Rng(0x9e37_79b9_7f4a_7c15))
         .init_state::<Screen>()
         .add_systems(PreStartup, load_art)
+        .add_systems(Startup, spawn_vignette)
         .add_plugins((link::plugin, world::plugin, water::plugin, npc::plugin, clouds::plugin, view::plugin, ui::plugin, ops::plugin))
         .run();
 }

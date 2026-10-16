@@ -8,7 +8,7 @@ title: Lucky Monkey source - subset-fonts.py
 
 ```python
 #!/usr/bin/env python3
-"""Re-subset the embedded fonts to exactly the characters the game uses.
+"""(Mostly obsolete: the emoji and DejaVu fonts are now shipped whole so any text in the JSON renders.) Re-subset the embedded fonts to exactly the characters the game uses.
 
 Run from the repo root after adding any non-ASCII text or emoji to game/src/*.rs
 or the world data. Needs fontTools:  python3 -m venv /tmp/ft && /tmp/ft/bin/pip install fonttools
@@ -28,7 +28,7 @@ SUBSET = [sys.executable, "-m", "fontTools.subset"]
 TWEMOJI = os.environ.get("TWEMOJI", os.path.expanduser("~/Projects/hedgepets/assets/fonts/emoji/Twemoji.Mozilla.ttf"))
 OUT = "game/assets/fonts"
 
-text = "".join(open(f, encoding="utf-8").read() for f in glob.glob("game/src/*.rs") + ["game/assets/world.json", "game/assets/npcs.json"])
+text = "".join(open(f, encoding="utf-8").read() for f in glob.glob("game/src/*.rs") + ["game/data/world.json", "game/data/npcs.json", "game/data/tuning.json"])
 chars = sorted({c for c in text if ord(c) > 127})
 uni = ",".join("U+%04X" % ord(c) for c in chars)
 

@@ -79,7 +79,7 @@ impl Kind {
 struct Clock(Timer);
 
 pub fn plugin(app: &mut App) {
-    let roster: Vec<NpcIn> = serde_json::from_str(include_str!("../assets/npcs.json")).expect("npcs.json");
+    let roster: Vec<NpcIn> = serde_json::from_str(crate::data::npcs_json()).expect("npcs.json");
     app.insert_resource(Roster(roster))
         .insert_resource(Clock(Timer::from_seconds(STEP_SECS, TimerMode::Repeating)))
         .add_systems(Startup, spawn_start)

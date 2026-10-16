@@ -4,7 +4,7 @@ title: Lucky Monkey source code
 
 # Source code
 
-The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: d1381a6 2026-10-15). Back to the [documentation](../index.md).
+The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: 263d900 2026-10-15). Back to the [documentation](../index.md).
 
 **Where to start reading:** [main.rs](main.md) (how the app is put together), then [ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and [fn clock](ops.md#fn_clock).
 
@@ -12,15 +12,15 @@ The whole game, readable in the wiki. Each Rust file has a heading for every fun
 
 | File | What it does | Size |
 |---|---|---|
-| [game/src/main.rs](main.md) | App setup: the window and canvas, shared fonts and textures (`Art`), procedural textures, the random generator, screens. | 6 functions, 21 items |
+| [game/src/main.rs](main.md) | App setup: the window and canvas, shared fonts and textures (`Art`), procedural textures, the random generator, screens. | 8 functions, 24 items |
 | [game/src/link.rs](link.md) | Deep links: reads the URL hash (`#node=…&incident=…`) so a link can open the game at a place with something staged. | 3 functions, 5 items |
-| [game/src/world.rs](world.md) | The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards. | 16 functions, 41 items |
+| [game/src/world.rs](world.md) | The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards. | 16 functions, 42 items |
 | [game/src/water.rs](water.md) | Living water: waterfall streams, lagoon bubbles, glints, and data frames floating down the rivers. | 4 functions, 14 items |
 | [game/src/npc.rs](npc.md) | Wandering critters: monkeys, ghosts, bananas, lizards, crocodiles. | 5 functions, 21 items |
 | [game/src/clouds.rs](clouds.md) | Clouds drawn like the original divs; rain; storms that flash and send lightning strikes. | 8 functions, 21 items |
 | [game/src/view.rs](view.md) | The camera: pan, zoom, touch, picking nodes, following, deep-link zoom. | 11 functions, 21 items |
 | [game/src/ui.rs](ui.md) | Welcome screen, zoom buttons, hint bar, the node panel. | 18 functions, 38 items |
-| [game/src/ops.rs](ops.md) | The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD. | 32 functions, 78 items |
+| [game/src/ops.rs](ops.md) | The game itself: failures and fixes, the network model, the shift clock, the monkey, routing, alerts, the HUD. | 32 functions, 76 items |
 
 ## Around it: data, build, hosting
 

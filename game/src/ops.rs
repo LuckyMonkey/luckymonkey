@@ -21,6 +21,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use crate::clouds::Strike;
+use crate::data::{tuning, ActionDef, FailureDef};
 use crate::ui::{Blocks, GREEN_300, GREEN_400, GREEN_500, GREEN_900, RED_400, RED_500};
 use crate::view::ViewState;
 use crate::world::{emoji_text, iso, node_color, NodeCard, World, NODE_Z};
@@ -40,81 +41,43 @@ pub enum Failure {
 }
 
 impl Failure {
-    pub fn emoji(self) -> &'static str {
+    /// Key in tuning.json `failures`.
+    fn key(self) -> &'static str {
         match self {
-            Failure::Ddos => "🐘",
-            Failure::Worm => "🐛",
-            Failure::Disparity => "⚖️",
-            Failure::BadDeploy | Failure::Migration => "📦",
-            Failure::Surge => "⚡",
-            Failure::Cert => "🔐",
-            Failure::Leak => "🍌",
-            Failure::DiskFull => "💾",
+            Failure::Ddos => "ddos",
+            Failure::Worm => "worm",
+            Failure::Disparity => "disparity",
+            Failure::BadDeploy => "deploy",
+            Failure::Migration => "migration",
+            Failure::Surge => "lightning",
+            Failure::Cert => "cert",
+            Failure::Leak => "leak",
+            Failure::DiskFull => "disk",
         }
+    }
+    fn def(self) -> Option<&'static FailureDef> {
+        tuning().failures.get(self.key())
+    }
+    pub fn emoji(self) -> &'static str {
+        self.def().map_or("⚠️", |d| d.emoji.as_str())
     }
     pub fn name(self) -> &'static str {
-        match self {
-            Failure::Ddos => "DDoS stampede",
-            Failure::Worm => "Worm",
-            Failure::Disparity => "Replica disparity",
-            Failure::BadDeploy => "Bad deploy",
-            Failure::Migration => "Bad deploy + migration",
-            Failure::Surge => "Lightning strike",
-            Failure::Cert => "Expired certificate",
-            Failure::Leak => "Memory leak",
-            Failure::DiskFull => "Disk full",
-        }
+        self.def().map_or(self.key(), |d| d.name.as_str())
     }
     pub fn symptom(self) -> &'static str {
-        match self {
-            Failure::Ddos => "Requests x40. A herd of 9,000 monkeys is hammering one endpoint. Spills onto neighbours once the node falls over.",
-            Failure::Worm => "Unknown process copying itself over every API connection. Crawls to a neighbour each time its timer runs out.",
-            Failure::Disparity => "Replica checksums disagree: two copies, two different banana counts. Data is lost if it goes down.",
-            Failure::BadDeploy => "v2.4 went out and the error rate is 30%. No schema change: v2.3 is still compatible.",
-            Failure::Migration => "v2.4 migrated the schema and the error rate is 30%. v2.3 can't read the new tables.",
-            Failure::Surge => "Lightning hit the rack. The primary power supply is dead.",
-            Failure::Cert => "TLS handshakes failing. The certificate expired.",
-            Failure::Leak => "Banana heap growing 2 GB/min, swap is thrashing. Nothing else is wrong.",
-            Failure::DiskFull => "Disk 100%. Writes failing, logs can't rotate, the replicas are stuck.",
-        }
+        self.def().map_or("", |d| d.symptom.as_str())
     }
     pub fn fix(self) -> Action {
-        match self {
-            Failure::Ddos => Action::RateLimit,
-            Failure::Worm => Action::Quarantine,
-            Failure::Disparity => Action::Resync,
-            Failure::BadDeploy => Action::Rollback,
-            Failure::Migration => Action::FallForward,
-            Failure::Surge => Action::Failover,
-            Failure::Cert => Action::RotateCert,
-            Failure::Leak => Action::Restart,
-            Failure::DiskFull => Action::Cleanup,
-        }
+        self.def().and_then(|d| Action::from_key(&d.fix)).unwrap_or(Action::Restart)
     }
     /// What the Watchtower says before it happens, and the action that prevents it.
     pub fn forecast(self) -> Option<(&'static str, &'static str, Action)> {
-        match self {
-            Failure::Cert => Some(("🔐", "The TLS certificate is about to expire. Renew it before the countdown ends.", Action::RotateCert)),
-            Failure::BadDeploy | Failure::Migration => {
-                Some(("📅", "A deploy of v2.4 is scheduled. Push it through a canary first and a bad build never reaches everyone.", Action::Canary))
-            }
-            Failure::DiskFull => Some(("💾", "Disk at 85% and climbing. Clear old snapshots before it fills.", Action::Cleanup)),
-            Failure::Worm => Some(("🧬", "A worm signature is spreading in the wild and this node is unpatched.", Action::Patch)),
-            _ => None,
-        }
+        let f = self.def()?.forecast.as_ref()?;
+        Some((f.emoji.as_str(), f.text.as_str(), Action::from_key(&f.prevent)?))
     }
     /// Seconds from appearing to escalating.
     fn ttl(self) -> f32 {
-        match self {
-            Failure::Ddos => 30.0,
-            Failure::Worm => 35.0,
-            Failure::Disparity => 50.0,
-            Failure::BadDeploy | Failure::Migration => 45.0,
-            Failure::Surge => 28.0,
-            Failure::Cert => 40.0,
-            Failure::Leak => 45.0,
-            Failure::DiskFull => 40.0,
-        }
+        self.def().map_or(40.0, |d| d.ttl)
     }
 }
 
@@ -147,51 +110,37 @@ impl Action {
         Action::Cleanup,
         Action::Patch,
     ];
-    pub fn emoji(self) -> &'static str {
+    /// Key in tuning.json `actions`.
+    fn key(self) -> &'static str {
         match self {
-            Action::RateLimit => "🛡️",
-            Action::Quarantine => "🚧",
-            Action::Resync => "🔁",
-            Action::Rollback => "⏪",
-            Action::FallForward => "⏩",
-            Action::Failover => "🔌",
-            Action::RotateCert => "🔑",
-            Action::Restart => "🔄",
-            Action::Canary => "🐤",
-            Action::Cleanup => "🧹",
-            Action::Patch => "🩹",
+            Action::RateLimit => "ratelimit",
+            Action::Quarantine => "quarantine",
+            Action::Resync => "resync",
+            Action::Rollback => "rollback",
+            Action::FallForward => "fallforward",
+            Action::Failover => "failover",
+            Action::RotateCert => "rotatecert",
+            Action::Restart => "restart",
+            Action::Canary => "canary",
+            Action::Cleanup => "cleanup",
+            Action::Patch => "patch",
         }
     }
+    fn from_key(k: &str) -> Option<Action> {
+        Action::ALL.into_iter().find(|a| a.key() == k)
+    }
+    fn def(self) -> Option<&'static ActionDef> {
+        tuning().actions.get(self.key())
+    }
+    pub fn emoji(self) -> &'static str {
+        self.def().map_or("🔧", |d| d.emoji.as_str())
+    }
     pub fn label(self) -> &'static str {
-        match self {
-            Action::RateLimit => "Rate-limit at the firewall",
-            Action::Quarantine => "Quarantine the node",
-            Action::Resync => "Resync replicas from primary",
-            Action::Rollback => "Roll back the deploy",
-            Action::FallForward => "Fall forward: ship a hotfix",
-            Action::Failover => "Fail over to standby",
-            Action::RotateCert => "Rotate the certificate",
-            Action::Restart => "Restart the service",
-            Action::Canary => "Canary the deploy",
-            Action::Cleanup => "Clean up old snapshots",
-            Action::Patch => "Patch the node",
-        }
+        self.def().map_or(self.key(), |d| d.label.as_str())
     }
     /// Seconds of work at the node.
     pub fn secs(self) -> f32 {
-        match self {
-            Action::RateLimit => 3.0,
-            Action::Quarantine => 2.5,
-            Action::Resync => 7.0,
-            Action::Rollback => 5.0,
-            Action::FallForward => 8.0,
-            Action::Failover => 4.0,
-            Action::RotateCert => 3.0,
-            Action::Restart => 3.0,
-            Action::Canary => 5.0,
-            Action::Cleanup => 4.0,
-            Action::Patch => 4.0,
-        }
+        self.def().map_or(3.0, |d| d.secs)
     }
 }
 
@@ -282,7 +231,6 @@ pub enum Phase {
     Lost,
 }
 
-const SHIFT_SECS: f32 = 480.0;
 const START_HOUR: f32 = 9.0;
 const HOURS: f32 = 8.0;
 
@@ -308,7 +256,7 @@ impl Shift {
     }
     /// 0 at 09:00, 1 at 17:00.
     fn progress(&self) -> f32 {
-        (self.clock / SHIFT_SECS).clamp(0.0, 1.0)
+        (self.clock / tuning().shift_secs).clamp(0.0, 1.0)
     }
     fn time_of_day(&self) -> String {
         let h = START_HOUR + self.progress() * HOURS;
@@ -345,8 +293,6 @@ struct Job {
     total: f32,
 }
 
-const LINK_SPEED: f32 = 240.0;
-const HIKE_SPEED: f32 = 70.0;
 
 #[derive(Component)]
 struct LinkLine(usize);
@@ -685,11 +631,11 @@ fn incident(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
 
 fn forecast(rng: &mut Rng, failure: Failure, now: f32) -> Alert {
     let right = failure.forecast().map_or(failure.fix(), |f| f.2);
-    Alert { failure, forecast: true, ttl: 50.0 + rng.f32() * 30.0, options: options_for(rng, right), tried: 0, since: now }
+    Alert { failure, forecast: true, ttl: { let [lo, hi] = tuning().forecast_ttl; lo + rng.f32() * (hi - lo) }, options: options_for(rng, right), tried: 0, since: now }
 }
 
 fn start(shift: &mut Shift, net: &mut Net, monkey: &mut Monkey) {
-    *shift = Shift { phase: Phase::Running, sla: 100.0, next_incident: 6.0, next_forecast: 14.0, ..default() };
+    *shift = Shift { phase: Phase::Running, sla: tuning().start_sla, next_incident: tuning().first_incident, next_forecast: tuning().first_forecast, ..default() };
     net.health.iter_mut().for_each(|h| *h = Health::Online);
     net.alerts.iter_mut().for_each(|a| *a = None);
     net.queued = None;
@@ -738,9 +684,9 @@ fn route(net: &Net, from: usize, to: usize) -> Option<Vec<usize>> {
 /// Seconds until the monkey reaches `to` on its current plan (roughly).
 fn eta(net: &Net, monkey: &Monkey, to: usize) -> f32 {
     let Some(&next) = monkey.path.front() else {
-        return if monkey.at == to { 0.0 } else { net.at[monkey.at].distance(net.at[to]) / LINK_SPEED };
+        return if monkey.at == to { 0.0 } else { net.at[monkey.at].distance(net.at[to]) / tuning().link_speed };
     };
-    let speed = |overland: bool| if overland { HIKE_SPEED } else { LINK_SPEED };
+    let speed = |overland: bool| if overland { tuning().hike_speed } else { tuning().link_speed };
     let mut t = (1.0 - monkey.leg) * monkey.leg_len / speed(monkey.overland);
     let mut prev = next;
     for &p in monkey.path.iter().skip(1) {
@@ -845,7 +791,7 @@ fn controls(
         return;
     }
     let action = alert.options[choice];
-    let total = action.secs() * if net.health[node] == Health::Down { 1.5 } else { 1.0 };
+    let total = action.secs() * if net.health[node] == Health::Down { tuning().down_work_mult } else { 1.0 };
     monkey.job = Some(Job { node, option: choice, action, alert: alert.since, left: total, total });
     monkey.send(&net, node);
     net.queued = Some((node, choice));
@@ -862,7 +808,7 @@ fn walk(time: Res<Time>, shift: Res<Shift>, net: Res<Net>, mut monkey: ResMut<Mo
     let mut dt = time.delta_secs();
     while dt > 0.0 {
         let Some(&next) = monkey.path.front() else { break };
-        let base = if monkey.overland { HIKE_SPEED } else { LINK_SPEED };
+        let base = if monkey.overland { tuning().hike_speed } else { tuning().link_speed };
         let slow = if net.health[next] == Health::Degraded || net.health[monkey.at] == Health::Degraded { 0.5 } else { 1.0 };
         let speed = base * slow;
         let step = speed * dt / monkey.leg_len;
@@ -907,7 +853,8 @@ fn work(mut commands: Commands, time: Res<Time>, art: Res<Art>, mut shift: ResMu
         return;
     };
     if job.action == alert.right() {
-        let points = if alert.forecast { 150 } else { 100 + (alert.ttl.max(0.0) * 2.0) as u32 };
+        let t = tuning();
+        let points = if alert.forecast { t.points_prevent as u32 } else { (t.points_fix + alert.ttl.max(0.0) * t.points_per_ttl_sec) as u32 };
         shift.score += points;
         net.alerts[node] = None;
         net.health[node] = Health::Online;
@@ -922,9 +869,9 @@ fn work(mut commands: Commands, time: Res<Time>, art: Res<Art>, mut shift: ResMu
         }
     } else {
         alert.tried |= 1 << job.option;
-        shift.sla -= 2.0;
+        shift.sla -= tuning().wrong_fix_sla;
         if !alert.forecast {
-            alert.ttl = (alert.ttl - 8.0).max(0.5);
+            alert.ttl = (alert.ttl - tuning().wrong_fix_ttl).max(0.5);
         }
         net.alerts[node] = Some(alert);
         shift.say(format!("✗ {name}: \"{}\" didn't help", job.action.label()));
@@ -957,12 +904,12 @@ fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut ne
                 net.health[i] = Health::Degraded;
                 shift.say(format!("🚨 {} {} on {name}", hit.emoji(), hit.name()));
             } else {
-                a.ttl = 40.0;
+                a.ttl = tuning().down_ttl;
                 if net.health[i] != Health::Down {
                     net.health[i] = Health::Down;
                     shift.say(format!("⛔ {name} is down ({})", a.failure.name()));
                     if a.failure == Failure::Disparity {
-                        shift.sla -= 6.0;
+                        shift.sla -= tuning().disparity_loss;
                         shift.say(format!("💥 {name}: replicas diverged, data lost"));
                     }
                 }
@@ -991,8 +938,8 @@ fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut ne
         .iter()
         .map(|h| match h {
             Health::Online => 0.0,
-            Health::Degraded => 0.04,
-            Health::Down => 0.2,
+            Health::Degraded => tuning().drain_degraded,
+            Health::Down => tuning().drain_down,
         })
         .sum();
     shift.sla -= drain * dt;
@@ -1001,7 +948,7 @@ fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut ne
     let p = shift.progress();
     let free = |net: &Net| -> Vec<usize> { (0..n).filter(|&i| net.alerts[i].is_none() && net.health[i] == Health::Online).collect() };
     if shift.clock >= shift.next_incident {
-        shift.next_incident = shift.clock + (26.0 - 14.0 * p) * (0.7 + rng.f32() * 0.6);
+        shift.next_incident = shift.clock + (tuning().incident_every[0] - tuning().incident_every[1] * p) * (0.7 + rng.f32() * 0.6);
         let free = free(&net);
         if !free.is_empty() {
             let i = free[rng.below(free.len())];
@@ -1017,7 +964,7 @@ fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut ne
         }
     }
     if shift.clock >= shift.next_forecast {
-        shift.next_forecast = shift.clock + (30.0 - 14.0 * p) * (0.7 + rng.f32() * 0.6);
+        shift.next_forecast = shift.clock + (tuning().forecast_every[0] - tuning().forecast_every[1] * p) * (0.7 + rng.f32() * 0.6);
         let free = free(&net);
         if !free.is_empty() {
             let i = free[rng.below(free.len())];
@@ -1041,9 +988,9 @@ fn clock(time: Res<Time>, mut rng: ResMut<Rng>, mut shift: ResMut<Shift>, mut ne
         let s = format!("SLA breached at {}. ★ {}  fixes {}  prevented {}", shift.time_of_day(), shift.score, shift.fixes, shift.prevented);
         shift.say(s);
         net.touch();
-    } else if shift.clock >= SHIFT_SECS {
+    } else if shift.clock >= tuning().shift_secs {
         shift.phase = Phase::Won;
-        let bonus = (shift.sla * 10.0) as u32;
+        let bonus = (shift.sla * tuning().survive_mult) as u32;
         shift.score += bonus;
         let s = format!("17:00, shift survived! SLA bonus +{bonus}. ★ {}", shift.score);
         shift.say(s);
@@ -1058,7 +1005,7 @@ fn strikes(mut reader: MessageReader<Strike>, mut rng: ResMut<Rng>, mut shift: R
             continue;
         }
         let Some((i, d)) = net.at.iter().enumerate().map(|(i, p)| (i, p.distance(*at))).min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
-        if d > 110.0 || rng.f32() > 0.5 {
+        if d > tuning().lightning_range || rng.f32() > tuning().lightning_chance {
             continue;
         }
         let alert = incident(&mut rng, Failure::Surge, shift.clock);

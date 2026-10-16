@@ -27,7 +27,17 @@ export default function Home() {
       setError("This browser has no WebGL2, which Lucky Monkey needs.")
       return
     }
-    import(/* webpackIgnore: true */ asset("/game/luckymonkey.js"))
+    // Live data: the game reads these JSON files at startup (game/src/data.rs), so
+    // they can be edited and redeployed without rebuilding the wasm.
+    const load = (name: string) =>
+      fetch(asset(`/game/data/${name}.json`), { cache: "no-cache" })
+        .then((r) => (r.ok ? r.text() : null))
+        .catch(() => null)
+    Promise.all(["world", "npcs", "tuning"].map(async (n) => [n, await load(n)] as const))
+      .then((files) => {
+        ;(window as unknown as { LM_DATA: Record<string, string | null> }).LM_DATA = Object.fromEntries(files)
+        return import(/* webpackIgnore: true */ asset("/game/luckymonkey.js"))
+      })
       .then((game) => {
         // Nothing may sit behind the canvas once the game draws: Firefox composites
         // translucent UI against it (and against stale frames).
