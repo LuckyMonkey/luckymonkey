@@ -17,6 +17,8 @@ const DRAG_THRESHOLD: f32 = 6.0;
 pub struct ViewState {
     pub zoom: f32,
     pub selected: Option<usize>,
+    /// Glide the camera here (cleared when reached or when the player pans).
+    pub focus: Option<Vec2>,
 }
 
 /// Zoom requests from the HUD buttons, applied about the screen centre.
@@ -37,12 +39,12 @@ struct Drag {
 pub struct PointerOverUi(pub bool);
 
 pub fn plugin(app: &mut App) {
-    app.insert_resource(ViewState { zoom: 1.0, selected: None })
+    app.insert_resource(ViewState { zoom: 1.0, selected: None, focus: None })
         .init_resource::<Drag>()
         .init_resource::<PointerOverUi>()
         .add_message::<ZoomBy>()
         .add_systems(Startup, spawn_camera)
-        .add_systems(Update, (mouse, touch, keys, zoom_buttons).run_if(in_state(Screen::Playing)));
+        .add_systems(Update, (mouse, touch, keys, zoom_buttons, follow).run_if(in_state(Screen::Playing)));
 }
 
 fn spawn_camera(mut commands: Commands, world: Res<World>, windows: Query<&Window>, mut view: ResMut<ViewState>) {
@@ -61,6 +63,18 @@ type Cam<'w, 's> = Single<'w, 's, (&'static mut Transform, &'static mut Projecti
 fn to_world(win: &Window, cam: &Transform, zoom: f32, p: Vec2) -> Vec2 {
     let off = p - win.size() / 2.0;
     cam.translation.truncate() + Vec2::new(off.x, -off.y) / zoom
+}
+
+fn follow(time: Res<Time>, mut cam: Single<&mut Transform, With<Camera2d>>, mut view: ResMut<ViewState>) {
+    let Some(target) = view.focus else { return };
+    // Aim a little above the node so the panel at the bottom doesn't cover it.
+    let target = target - Vec2::Y * 80.0 / view.zoom;
+    let p = cam.translation.truncate();
+    let k = 1.0 - (-time.delta_secs() * 8.0).exp();
+    cam.translation = p.lerp(target, k).extend(cam.translation.z);
+    if p.distance(target) < 2.0 {
+        view.focus = None;
+    }
 }
 
 fn pan(cam: &mut Transform, zoom: f32, screen_delta: Vec2) {
@@ -108,6 +122,9 @@ fn mouse(
         drag.on_ui = over_ui.0;
         drag.last = cursor;
         drag.moved = 0.0;
+        if !over_ui.0 {
+            view.focus = None;
+        }
     }
     if buttons.any_pressed(any) && !drag.on_ui {
         if let (Some(last), Some(cur)) = (drag.last, cursor) {
@@ -150,6 +167,9 @@ fn touch(
     if touches.any_just_pressed() && touches.iter().count() == 1 {
         drag.on_ui = over_ui.0;
         drag.moved = 0.0;
+        if !over_ui.0 {
+            view.focus = None;
+        }
     }
     let active: Vec<_> = touches.iter().collect();
     match active.as_slice() {
@@ -197,6 +217,7 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, window: Single<&Window
         }
     }
     if d != Vec2::ZERO {
+        view.focus = None;
         pan(&mut tf, 1.0, d.normalize() * 600.0 * time.delta_secs());
     }
     let centre = window.size() / 2.0;

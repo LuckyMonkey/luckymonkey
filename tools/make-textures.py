@@ -4,10 +4,8 @@
 tiles.png  - 4x4 atlas of the 32px tile sprites, each cell padded 1px by edge
              extension so diamond UVs never bleed; cell 15 is plain white (walls).
 card.png / card_border.png - node card fill + outline at 2x (160px, radius 16).
-cloud.png  - one soft puffy cloud, white, alpha falloff.
 """
-import math, random
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 TILES = ["grass1", "grass2", "grass3", "grass4",
          "water", "water1", "water3", "water4", "water5",
@@ -36,18 +34,4 @@ border = Image.new("RGBA", (S, S), (0, 0, 0, 0))
 ImageDraw.Draw(border).rounded_rectangle((1, 1, S - 2, S - 2), radius=16, outline=(255, 255, 255, 255), width=4)
 border.save("game/assets/card_border.png")
 
-W, H = 256, 128
-rng = random.Random(7)
-cloud = Image.new("L", (W, H), 0)
-d = ImageDraw.Draw(cloud)
-for _ in range(14):
-    r = rng.uniform(18, 34)
-    x = rng.uniform(40 + r * 0.5, W - 40 - r * 0.5)
-    y = H * 0.58 - rng.uniform(0, 26) * (1 - abs(x - W / 2) / (W / 2))
-    d.ellipse((x - r, y - r, x + r, y + r), fill=255)
-d.rectangle((52, H * 0.58, W - 52, H * 0.58 + 16), fill=255)
-cloud = cloud.filter(ImageFilter.GaussianBlur(7))
-out = Image.new("RGBA", (W, H), (255, 255, 255, 0))
-out.putalpha(cloud)
-out.save("game/assets/cloud.png")
 print("textures ok")

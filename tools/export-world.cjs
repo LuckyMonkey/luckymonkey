@@ -17,7 +17,7 @@ const load = (rel) => {
 const { worldData } = load("lib/world-data.ts")
 const { initialNPCs } = load("lib/npc-data.ts")
 const out = path.join(root, "game/assets")
-const tiles = worldData.chunks.flatMap((c) => c.tiles).map(({ x, y, type, height }) => ({ x, y, type, height }))
+const tiles = worldData.chunks.flatMap((c) => c.tiles).map(({ x, y, type, height, isWaterfall, isLagoon }) => ({ x, y, type, height, ...(isWaterfall && { fall: true }), ...(isLagoon && { lagoon: true }) }))
 const world = { seed: worldData.meta.seed, tiles, nodes: worldData.nodes, decorations: worldData.decorations }
 fs.writeFileSync(`${out}/world.json`, JSON.stringify(world))
 const npcs = initialNPCs.map(({ id, type, x, y, height, direction, speed, emoji, lifespan }) => ({ id, type, x, y, height, direction, speed, emoji, lifespan }))

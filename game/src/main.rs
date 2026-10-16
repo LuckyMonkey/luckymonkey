@@ -5,12 +5,15 @@
 
 mod clouds;
 mod npc;
+mod ops;
 mod ui;
 mod view;
+mod water;
 mod world;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::prelude::*;
 
 #[derive(States, Default, Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -26,12 +29,14 @@ pub struct Art {
     pub mono: Handle<Font>,
     pub bold: Handle<Font>,
     pub emoji: Handle<Font>,
-    /// Japanese glyphs used by node names and labels (subset), fallback for mono/bold.
+    /// Japanese glyphs used by node names and labels (subset), fallback for mono/bold
+    /// (then emoji, so HUD lines can mix them in).
     pub cjk: Handle<Font>,
     pub tiles: Handle<Image>,
     pub card: Handle<Image>,
     pub card_border: Handle<Image>,
-    pub cloud: Handle<Image>,
+    /// Soft white dot: bubbles, glints, packets.
+    pub dot: Handle<Image>,
     pub grid: Handle<Image>,
 }
 
@@ -40,7 +45,7 @@ impl Art {
     pub fn text(&self, bold: bool, size: f32) -> TextFont {
         let main = if bold { &self.bold } else { &self.mono };
         TextFont {
-            font: FontSource::List(vec![main.clone().into(), self.cjk.clone().into()]),
+            font: FontSource::List(vec![main.clone().into(), self.cjk.clone().into(), self.emoji.clone().into()]),
             font_size: FontSize::Px(size),
             ..default()
         }
@@ -76,6 +81,19 @@ fn png(images: &mut Assets<Image>, bytes: &[u8], sampler: ImageSampler) -> Handl
     images.add(image)
 }
 
+fn dot(images: &mut Assets<Image>) -> Handle<Image> {
+    const N: u32 = 32;
+    let mut data = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let d = Vec2::new(x as f32 + 0.5, y as f32 + 0.5).distance(Vec2::splat(N as f32 / 2.0)) / (N as f32 / 2.0);
+            data.extend([255, 255, 255, (((1.0 - d) * 3.0).clamp(0.0, 1.0) * 255.0) as u8]);
+        }
+    }
+    let size = Extent3d { width: N, height: N, depth_or_array_layers: 1 };
+    images.add(Image::new(size, TextureDimension::D2, data, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
+}
+
 fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts: ResMut<Assets<Font>>) {
     let font = |b: &[u8]| Font::from_bytes(b.to_vec());
     commands.insert_resource(Art {
@@ -86,7 +104,7 @@ fn load_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut fonts
         tiles: png(&mut images, include_bytes!("../assets/tiles.png"), ImageSampler::nearest()),
         card: png(&mut images, include_bytes!("../assets/card.png"), ImageSampler::linear()),
         card_border: png(&mut images, include_bytes!("../assets/card_border.png"), ImageSampler::linear()),
-        cloud: png(&mut images, include_bytes!("../assets/cloud.png"), ImageSampler::linear()),
+        dot: dot(&mut images),
         grid: png(&mut images, include_bytes!("../../public/images/grid_background.png"), ImageSampler::linear()),
     });
 }
@@ -107,6 +125,6 @@ fn main() {
         .insert_resource(Rng(0x9e37_79b9_7f4a_7c15))
         .init_state::<Screen>()
         .add_systems(PreStartup, load_art)
-        .add_plugins((world::plugin, npc::plugin, clouds::plugin, view::plugin, ui::plugin))
+        .add_plugins((world::plugin, water::plugin, npc::plugin, clouds::plugin, view::plugin, ui::plugin, ops::plugin))
         .run();
 }

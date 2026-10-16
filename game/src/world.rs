@@ -26,6 +26,7 @@ const PYRAMID: (i32, i32) = (17, 17);
 const PYRAMID_HEIGHT: f32 = 5.0;
 
 pub mod kind {
+    pub const GRASS: u8 = 0;
     pub const WATER: u8 = 1;
     pub const PLATFORM: u8 = 4;
     pub const SCORCHED: u8 = 5;
@@ -47,6 +48,10 @@ struct TileIn {
     #[serde(rename = "type")]
     kind: u8,
     height: f32,
+    #[serde(default)]
+    fall: bool,
+    #[serde(default)]
+    lagoon: bool,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -89,6 +94,16 @@ struct Deco {
 pub struct Tile {
     pub kind: u8,
     pub height: f32,
+    /// Part of the waterfall at the river's source.
+    pub fall: bool,
+    /// Part of the logical lagoon (bubbles).
+    pub lagoon: bool,
+}
+
+impl Tile {
+    fn ground(kind: u8, height: f32) -> Tile {
+        Tile { kind, height, fall: false, lagoon: false }
+    }
 }
 
 #[derive(Resource)]
@@ -140,8 +155,19 @@ pub fn plugin(app: &mut App) {
     let mut tiles: HashMap<(i32, i32), Tile> = HashMap::new();
     for t in &file.tiles {
         let key = (t.x.round() as i32, t.y.round() as i32);
-        let new = Tile { kind: t.kind, height: t.height.max(0.0) };
-        tiles.entry(key).and_modify(|old| if new.height > old.height { *old = new }).or_insert(new);
+        let new = Tile { kind: t.kind, height: t.height.max(0.0), fall: t.fall, lagoon: t.lagoon };
+        tiles
+            .entry(key)
+            .and_modify(|old| {
+                let (fall, lagoon) = (old.fall || new.fall, old.lagoon || new.lagoon);
+                if new.height > old.height {
+                    *old = new;
+                }
+                if old.kind == kind::WATER {
+                    (old.fall, old.lagoon) = (fall, lagoon);
+                }
+            })
+            .or_insert(new);
     }
     // The temple pyramid generator stacks its layers upside down (widest layer
     // highest). Rebuild it as a stepped pyramid: the more layers cover a cell,
@@ -155,7 +181,32 @@ pub fn plugin(app: &mut App) {
         }
     }
     for (key, lowest) in layers {
-        tiles.insert(key, Tile { kind: kind::TEMPLE, height: (PYRAMID_HEIGHT + 1.0 - lowest).max(1.0) });
+        tiles.insert(key, Tile::ground(kind::TEMPLE, (PYRAMID_HEIGHT + 1.0 - lowest).max(1.0)));
+    }
+    // The river was generated on its own and floated in the void. Give it banks:
+    // a full ring of grass, plus a ragged second ring so the edge isn't a ruler line.
+    let mut banks: HashMap<(i32, i32), f32> = HashMap::new();
+    for (&(x, y), t) in tiles.iter().filter(|(_, t)| t.kind == kind::WATER) {
+        for dx in -2..=2i32 {
+            for dy in -2..=2i32 {
+                let k = (x + dx, y + dy);
+                let ring = dx.abs().max(dy.abs());
+                if ring == 0 || tiles.contains_key(&k) || (ring == 2 && cell_hash(k.0 * 3 + 1, k.1 * 5 + 2) > 0.45) {
+                    continue;
+                }
+                let h = banks.entry(k).or_insert(0.0);
+                *h = h.max(t.height);
+            }
+        }
+    }
+    let mut bank_decos = Vec::new();
+    for (&k, &h) in &banks {
+        tiles.insert(k, Tile::ground(kind::GRASS, h));
+        let r = cell_hash(k.0 * 7 + 3, k.1 * 11 + 5);
+        if r < 0.22 {
+            let kind = ["bush", "tree", "flower", "bamboo", "bush", "rock"][((r / 0.22) * 6.0) as usize % 6];
+            bank_decos.push(Deco { kind: kind.into(), position: Pos { x: k.0 as f32, y: k.1 as f32, height: h } });
+        }
     }
     let mut bounds = Rect::EMPTY;
     for (&(x, y), t) in &tiles {
@@ -163,7 +214,9 @@ pub fn plugin(app: &mut App) {
         bounds = bounds.union_point(p + Vec2::new(-TILE_W, TILE_H)).union_point(p + Vec2::new(TILE_W, -TILE_H - BASE * ELEV));
     }
     app.insert_resource(World { tiles, nodes: file.nodes, bounds });
-    app.insert_resource(Decos(file.decorations));
+    let mut decorations = file.decorations;
+    decorations.extend(bank_decos);
+    app.insert_resource(Decos(decorations));
     app.add_systems(Startup, (spawn_terrain, spawn_islands, spawn_backdrop, spawn_decorations, spawn_nodes));
 }
 

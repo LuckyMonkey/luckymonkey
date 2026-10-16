@@ -4,16 +4,17 @@
 
 use bevy::prelude::*;
 
+use crate::ops::{ActionButton, Net};
 use crate::view::{PointerOverUi, ViewState, ZoomBy};
 use crate::world::World;
 use crate::{Art, Screen};
 
-const GREEN_300: Color = Color::srgb(0.525, 0.937, 0.675);
-const GREEN_400: Color = Color::srgb(0.290, 0.871, 0.502);
-const GREEN_500: Color = Color::srgb(0.133, 0.773, 0.369);
-const GREEN_900: Color = Color::srgb(0.078, 0.325, 0.176);
-const RED_400: Color = Color::srgb(0.973, 0.443, 0.443);
-const RED_500: Color = Color::srgb(0.937, 0.267, 0.267);
+pub const GREEN_300: Color = Color::srgb(0.525, 0.937, 0.675);
+pub const GREEN_400: Color = Color::srgb(0.290, 0.871, 0.502);
+pub const GREEN_500: Color = Color::srgb(0.133, 0.773, 0.369);
+pub const GREEN_900: Color = Color::srgb(0.078, 0.325, 0.176);
+pub const RED_400: Color = Color::srgb(0.973, 0.443, 0.443);
+pub const RED_500: Color = Color::srgb(0.937, 0.267, 0.267);
 
 #[derive(Component)]
 struct WelcomeRoot;
@@ -41,19 +42,20 @@ enum Tab {
 }
 /// Pointer over this node means "not the world".
 #[derive(Component)]
-struct Blocks;
+pub struct Blocks;
 
 #[derive(Resource)]
 struct PanelState {
     shown: Option<usize>,
     tab: Tab,
     dirty: bool,
+    net_version: u32,
 }
 
 const LOAD_SECS: f32 = 0.9;
 
 pub fn plugin(app: &mut App) {
-    app.insert_resource(PanelState { shown: None, tab: Tab::Info, dirty: false })
+    app.insert_resource(PanelState { shown: None, tab: Tab::Info, dirty: false, net_version: 0 })
         .add_systems(Startup, spawn_welcome)
         .add_systems(Update, (welcome, proceed).run_if(in_state(Screen::Welcome)))
         .add_systems(OnEnter(Screen::Playing), spawn_hud)
@@ -353,12 +355,14 @@ fn panel(
     art: Res<Art>,
     world: Res<World>,
     view: Res<ViewState>,
+    net: Res<Net>,
     mut state: ResMut<PanelState>,
     roots: Query<Entity, With<PanelRoot>>,
 ) {
-    if state.shown == view.selected && !state.dirty {
+    if state.shown == view.selected && !state.dirty && state.net_version == net.version {
         return;
     }
+    state.net_version = net.version;
     if state.shown != view.selected {
         state.tab = Tab::Info;
     }
@@ -367,8 +371,10 @@ fn panel(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let Some(node) = view.selected.and_then(|i| world.nodes.get(i)) else { return };
+    let Some(index) = view.selected.filter(|&i| i < world.nodes.len()) else { return };
+    let node = &world.nodes[index];
     let tab = state.tab;
+    let incident = net.incidents[index];
 
     commands
         .spawn((
@@ -419,15 +425,17 @@ fn panel(
             });
             p.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), ..default() }).with_children(|body| match tab {
                 Tab::Info => {
+                    if let Some(inc) = incident {
+                        incident_box(body, &art, inc);
+                    }
                     let desc = if node.description.is_empty() { "No description available." } else { &node.description };
                     body.spawn(label(&art, desc, 12.0, GREEN_300));
-                    if let Some(status) = &node.status {
-                        body.spawn(section(&art, "ステータス Status"));
-                        body.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|r| {
-                            r.spawn((Node { width: px(8), height: px(8), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(status_color(status))));
-                            r.spawn(label(&art, status.clone(), 12.0, GREEN_300));
-                        });
-                    }
+                    let status = net.health[index].label();
+                    body.spawn(section(&art, "ステータス Status"));
+                    body.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|r| {
+                        r.spawn((Node { width: px(8), height: px(8), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(status_color(status))));
+                        r.spawn(label(&art, status, 12.0, GREEN_300));
+                    });
                     if !node.connections.is_empty() {
                         body.spawn(section(&art, "接続 Connections"));
                         body.spawn(Node { flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|g| {
@@ -489,4 +497,51 @@ fn panel(
                 }
             });
         });
+}
+
+/// The open incident on the selected node: what's wrong and the four candidate fixes (keys 1-4).
+fn incident_box(body: &mut ChildSpawnerCommands, art: &Art, inc: crate::ops::Incident) {
+    body.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(8)),
+            margin: UiRect::bottom(px(10)),
+            row_gap: px(6),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(6)),
+            ..default()
+        },
+        BorderColor::all(RED_500.with_alpha(0.6)),
+        BackgroundColor(Color::srgba(0.3, 0.04, 0.04, 0.5)),
+    ))
+    .with_children(|b| {
+        b.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
+            r.spawn(emoji(art, inc.failure.emoji(), 16.0));
+            r.spawn(bold(art, format!("INCIDENT · {}", inc.failure.name()), 12.0, RED_400));
+        });
+        b.spawn(label(art, inc.failure.symptom(), 11.0, Color::srgb(1.0, 0.85, 0.85)));
+        for (i, action) in inc.options.iter().enumerate() {
+            let tried = inc.tried & (1 << i) != 0;
+            let fg = if tried { Color::srgb(0.45, 0.45, 0.45) } else { GREEN_300 };
+            b.spawn((
+                ActionButton(i),
+                Interaction::default(),
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    padding: UiRect::axes(px(8), px(6)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(4)),
+                    ..default()
+                },
+                BorderColor::all(if tried { Color::srgba(0.4, 0.4, 0.4, 0.4) } else { GREEN_500.with_alpha(0.5) }),
+                BackgroundColor(if tried { Color::NONE } else { GREEN_900.with_alpha(0.4) }),
+            ))
+            .with_children(|r| {
+                r.spawn(bold(art, format!("{}", i + 1), 12.0, fg));
+                r.spawn(emoji(art, action.emoji(), 14.0));
+                r.spawn(label(art, action.label(), 12.0, fg));
+            });
+        }
+    });
 }
