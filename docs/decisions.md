@@ -4,6 +4,8 @@ title: Lucky Monkey - decisions and known issues
 
 # Decisions and known issues
 
+> Every odd-looking choice in this codebase has a story. These are the stories.
+
 Why things are the way they are. Newest concerns first in each section.
 
 ## Design decisions
@@ -26,12 +28,12 @@ Why things are the way they are. Newest concerns first in each section.
 
 ## Bugs found and fixed in the port
 
-- **Tile alignment.** The Pixi version drew the 32 px isometric *block* sprites
+- **Tile alignment.** ([details](world.md#tiles_and_the_alignment_fix)) The Pixi version drew the 32 px isometric *block* sprites
   squashed into 64×32 rectangles, so diamonds never met. Now drawn at 2× as
   blocks; the diamond lands on the grid.
-- **Upside-down pyramid.** The temple generator gave the widest layer the
+- **Upside-down pyramid.** ([code](source/world.md#fn_plugin), ▶ [see it](https://go.fridge.run/luckymonkey#node=monkey-statue&zoom=1.1)) The temple generator gave the widest layer the
   greatest height. The loader rebuilds it as a stepped pyramid.
-- **Floating river.** The river had no ground beside it. Added banks: one full
+- **Floating river.** ([code](source/world.md#fn_plugin)) The river had no ground beside it. Added banks: one full
   ring plus a ragged second ring, deliberately not more, so the void stays visible.
 - **Duplicate cells.** Several generators wrote the same cell; last-written won,
   causing holes in platforms. Now the tallest wins.
@@ -46,7 +48,7 @@ Why things are the way they are. Newest concerns first in each section.
 
 ## Rendering traps (Bevy 0.20 + Firefox)
 
-See [Interface](interface.md) for details: avoid UI `BoxShadow`, use high UI
+See [Interface](interface.md#traps_found_while_building_it) for details: avoid UI `BoxShadow`, use high UI
 background alpha, keep nothing behind the canvas, don't pre-create the WebGL context.
 
 ## Known issues

@@ -4,6 +4,8 @@ title: Lucky Monkey - build, deploy and test
 
 # Build, deploy and test
 
+> Two files come out the far end: a 106 KB JavaScript loader and a 28 MB WebAssembly engine. This is how they are made, shipped and checked.
+
 ## One command
 
     tools/deploy.sh          # regenerate assets, build on fridge, deploy, restart
@@ -24,7 +26,7 @@ directory on fridge is kept between runs).
 
 | Tool | Why |
 |---|---|
-| [rustup](https://rustup.rs) + stable Rust (cargo 1.99) | compiler and package manager |
+| [rustup](https://rustup.rs) + stable Rust (cargo 1.99) | compiler and package manager ([the Cargo book](https://doc.rust-lang.org/cargo/)) |
 | target `wasm32-unknown-unknown` | compile Rust to browser WebAssembly (`rustup target add wasm32-unknown-unknown`) |
 | [wasm-bindgen-cli](https://github.com/wasm-bindgen/wasm-bindgen) **0.2.129** | generates the JavaScript glue (`luckymonkey.js`) that loads the wasm and connects it to browser APIs |
 
@@ -37,15 +39,15 @@ Freezer needs: Node (for `export-world.cjs`; it borrows TypeScript from
 `node_modules`, the shared fridge-next runtime's), Python 3 with Pillow (for
 `make-textures.py`), rsync, ssh.
 
-## What `tools/deploy.sh` does, step by step
+## What [`tools/deploy.sh`](source/deploy-sh.md) does, step by step
 
-1. `node tools/export-world.cjs`: regenerate `game/assets/world.json` and `npcs.json` from `lib/*.ts`.
-2. `python3 tools/make-textures.py`: regenerate `tiles.png`, `card.png`, `card_border.png`.
+1. [`node tools/export-world.cjs`](source/export-world.md): regenerate `game/assets/world.json` and `npcs.json` from `lib/*.ts`.
+2. [`python3 tools/make-textures.py`](source/make-textures.md): regenerate `tiles.png`, `card.png`, `card_border.png`.
 3. `rsync` the repo to `fridge:~/build/luckymonkey/` (excluding `node_modules`,
    `.next`, `.git`, `game/target`, `public/game`).
 4. On fridge: `cargo build --release --target wasm32-unknown-unknown` in `game/`,
    then `wasm-bindgen --target web --no-typescript --out-dir ../public/game ...`.
-   Release profile: `opt-level = "s"` (optimise for size), thin LTO, one codegen
+   Release profile ([`Cargo.toml`](source/cargo-toml.md)): `opt-level = "s"` (optimise for size), thin LTO, one codegen
    unit, stripped symbols, `panic = "abort"` (all for a smaller wasm).
 5. *(deploy only)* On fridge, as root through `sudo -A`:
    - `rsync` the build dir to `/srv/apps/luckymonkey/` (the live app dir, root-owned, not a git checkout);
@@ -59,11 +61,11 @@ compressed; `luckymonkey.js` about 106 KB.
 
 ## Hosting
 
-- **Container** `luckymonkey` from `compose.yml`: image `fridge-next:14`, app
+- **Container** `luckymonkey` from [`compose.yml`](source/compose.md): image `fridge-next:14`, app
   mounted read-only at `/opt/fridge-next/apps/luckymonkey`, `next start` on port
   3000, 256 MB memory limit, on the Docker network shared with Caddy.
   Control: `sudo fridge-next luckymonkey up|down|restart|build|logs`.
-- **Base path** `/luckymonkey` (from `next.config.mjs`, `LM_BASE_PATH`).
+- **Base path** `/luckymonkey` (from [`next.config.mjs`](source/next-config.md), `LM_BASE_PATH`).
   `lib/asset.ts` prefixes it to the game file URLs.
 - **Routing:** `fridge-caddy` sends `go.fridge.run/luckymonkey` to the container
   (see [Architecture](:dev:architecture)). `fridge.run/luckymonkey` forwards there.
@@ -84,7 +86,7 @@ There are no unit tests; the game is checked by playing it in a real browser.
     tools/browser-test.sh                                   # the live site
     tools/browser-test.sh http://127.0.0.1:8791/ ./out      # a local copy
 
-The script starts Firefox inside a virtual X display (`xvfb-run`), so it is
+[The script](source/browser-test.md) starts Firefox inside a virtual X display (`xvfb-run`), so it is
 invisible and silent. It drives the game with `xdotool` key presses (welcome,
 start shift, Space, fix 1, wait, zoom out), screenshots with ImageMagick
 `import`, and fails if the console log shows a Rust panic. Look at the PNGs.

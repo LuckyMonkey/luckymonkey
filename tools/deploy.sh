@@ -13,6 +13,7 @@ B=build/luckymonkey
 
 node tools/export-world.cjs
 python3 tools/make-textures.py
+python3 tools/wiki-source.py   # docs/source/: the code as wiki pages (commit it if it changed)
 rsync -a --delete --exclude node_modules --exclude .next --exclude .git --exclude game/target --exclude public/game \
   --exclude tsconfig.tsbuildinfo ./ "$HOST:$B/"
 ssh "$HOST" "set -e; cd $B/game; export PATH=\$HOME/.cargo/bin:\$PATH

@@ -4,141 +4,175 @@ title: Lucky Monkey - the engine (Bevy)
 
 # The engine: Bevy
 
+> A complete game engine, compiled into a web page, drawing a jungle through
+> your graphics card. Here is how it is put together.
+
 ## What Bevy is
 
 [Bevy](https://bevyengine.org) is a free, open-source game engine written in
-[Rust](https://www.rust-lang.org). Lucky Monkey uses **Bevy 0.20.0**. Rust code
-is compiled to [WebAssembly](https://webassembly.org) (wasm, a compact binary
-format browsers run at near-native speed), and Bevy draws with
-[WebGL2](https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext)
-in the browser, via its graphics layer [wgpu](https://wgpu.rs).
+[Rust](https://www.rust-lang.org). Lucky Monkey uses **Bevy 0.20.0**.
 
-Useful references: the [Bevy book and examples](https://bevyengine.org/learn/),
-the [API docs for 0.20](https://docs.rs/bevy/0.20.0/bevy/), and the
-unofficial [Bevy Cheat Book](https://bevy-cheatbook.github.io) (good
-explanations, but check that a page matches 0.20; Bevy changes a lot between versions).
+- **Compiled for the browser:** the Rust code is compiled to
+  [WebAssembly](https://webassembly.org), a compact binary format browsers run at
+  near-native speed.
+- **Drawing:** Bevy draws with
+  [WebGL2](https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext)
+  through its graphics layer [wgpu](https://wgpu.rs).
+- **Window and input:** handled by [winit](https://github.com/rust-windowing/winit),
+  which on the web means "the canvas and its DOM events".
+
+Where to learn more:
+- [Bevy's learning page and examples](https://bevyengine.org/learn/)
+- [the 0.20 API reference](https://docs.rs/bevy/0.20.0/bevy/)
+- [The Rust Programming Language](https://doc.rust-lang.org/book/), if Rust itself is new
+- the unofficial [Bevy Cheat Book](https://bevy-cheatbook.github.io): excellent
+  explanations, but check each page matches 0.20, because Bevy changes a lot between versions.
 
 ## ECS in five minutes
 
-Bevy is built on **ECS: Entity, Component, System.** Once these click, the code reads easily.
+Bevy is built on **ECS: Entity, Component, System.** Once it clicks, every file in
+this game reads easily.
 
-- An **entity** is just an ID: a "thing" in the game (a node card, a cloud, a
-  data frame, a button).
-- A **component** is a piece of data attached to an entity. `Transform`
-  (position), `Sprite` (a picture), `Text2d`, and our own like `Cloud`,
-  `LinkFrame`, `Badge(usize)`. An entity is whatever its components make it.
-- A **system** is an ordinary Rust function that Bevy runs every frame (or once).
-  Its parameters declare what it needs: `Query<(&Cloud, &mut Transform)>`
-  means "every entity that has a Cloud and a Transform, let me change the Transform".
-- A **resource** is a single global value: `World` (the map), `Net` (network
-  state), `Shift`, `Monkey`, `Art` (fonts/textures), `Rng`.
-- A **message** (called an *event* in older Bevy) is a one-frame notice from one
-  system to another. Used for `ZoomBy` (HUD button → camera) and `Strike`
-  (lightning → game).
-- **States** switch groups of systems on and off. Lucky Monkey has `Screen::Welcome`
-  and `Screen::Playing`.
+| Concept | What it is | In Lucky Monkey | Bevy docs |
+|---|---|---|---|
+| **Entity** | just an ID: a "thing" | a node card, a cloud, one data frame, a button | [`Entity`](https://docs.rs/bevy/0.20.0/bevy/?search=Entity) |
+| **Component** | data attached to an entity | `Transform` (position), `Sprite`, `Text2d`, and our own [`LinkFrame`](source/ops.md#struct_linkframe), [`NodeCard`](source/world.md#struct_nodecard), [`Cloud`](source/clouds.md#struct_cloud) | [`Component`](https://docs.rs/bevy/0.20.0/bevy/?search=Component), [`Transform`](https://docs.rs/bevy/0.20.0/bevy/?search=Transform), [`Sprite`](https://docs.rs/bevy/0.20.0/bevy/?search=Sprite), [`Text2d`](https://docs.rs/bevy/0.20.0/bevy/?search=Text2d) |
+| **System** | an ordinary function Bevy runs every frame (or once) | [`fn frames`](source/ops.md#fn_frames) moves ~940 data frames; [`fn drift`](source/clouds.md#fn_drift) moves clouds | [`System`](https://docs.rs/bevy/0.20.0/bevy/?search=System), [`Query`](https://docs.rs/bevy/0.20.0/bevy/?search=Query) |
+| **Resource** | one global value | [`World`](source/world.md#struct_world) (the map), [`Net`](source/ops.md#struct_net) (network state), [`Shift`](source/ops.md#struct_shift), [`Monkey`](source/ops.md#struct_monkey), [`Art`](source/main.md#struct_art) | [`Resource`](https://docs.rs/bevy/0.20.0/bevy/?search=Resource), [`Res`](https://docs.rs/bevy/0.20.0/bevy/?search=Res) |
+| **Message** | a one-frame notice from one system to another (called *events* in older Bevy) | [`Strike`](source/clouds.md#struct_strike): lightning → game; [`ZoomBy`](source/view.md#struct_zoomby): button → camera | [`Message`](https://docs.rs/bevy/0.20.0/bevy/?search=Message), [`MessageWriter`](https://docs.rs/bevy/0.20.0/bevy/?search=MessageWriter) |
+| **State** | switches groups of systems on and off | [`Screen`](source/main.md#enum_screen): Welcome / Playing | [`States`](https://docs.rs/bevy/0.20.0/bevy/?search=States) |
 
-**Why ECS fits:** the game has thousands of small similar things (about 1,500
-data frames, 700 decorations, 400 water effects) each updated by one tiny
-system. ECS stores same-shaped data together, so this is fast, and adding a
-behaviour means adding a system rather than editing a class hierarchy.
+A system's parameters say what it needs, and Bevy hands those things over. For example:
 
-## How the app is assembled (`main.rs`)
+```rust
+fn drift(time: Res<Time>, world: Res<World>, mut clouds: Query<(&Cloud, &mut Transform)>) {
+    for (cloud, mut tf) in &mut clouds {
+        // move every cloud on the wind
+    }
+}
+```
+
+This one means "give me the clock, the map, and every entity that has a `Cloud`
+and a `Transform`, and let me change the `Transform`" ([the real code](source/clouds.md#fn_drift)).
+
+**Why ECS fits this game:** there are thousands of small, similar things (about
+940 link frames, 700 decorations, 100 river frames, hundreds of water effects),
+each moved by one tiny system. ECS stores same-shaped data together, so updating
+them is fast. Adding a behaviour means adding a system, not editing a class
+hierarchy. The water effects were added in one file without touching anything else.
+
+## How the app is assembled
+
+The whole app is built in [`fn main`](source/main.md#fn_main):
 
 ```rust
 App::new()
-    .add_plugins(DefaultPlugins.set(WindowPlugin { /* canvas "#lm-canvas", fit to parent */ }))
+    .add_plugins(DefaultPlugins.set(WindowPlugin { /* canvas "#lm-canvas", fit to parent, opaque */ }))
     .insert_resource(ClearColor(Color::BLACK))
     .insert_resource(Rng(0x9e37_79b9_7f4a_7c15))
     .init_state::<Screen>()
     .add_systems(PreStartup, load_art)
-    .add_plugins((world::plugin, water::plugin, npc::plugin, clouds::plugin,
-                  view::plugin, ui::plugin, ops::plugin))
+    .add_plugins((link::plugin, world::plugin, water::plugin, npc::plugin,
+                  clouds::plugin, view::plugin, ui::plugin, ops::plugin))
     .run();
 ```
 
-Each module is a **plugin**: a function that registers its resources and
-systems. `main.rs` also defines:
+Each module is a **plugin**, a function that registers its resources and
+systems ([Bevy plugins](https://docs.rs/bevy/0.20.0/bevy/?search=Plugin)):
+[link](source/link.md#fn_plugin), [world](source/world.md#fn_plugin),
+[water](source/water.md#fn_plugin), [npc](source/npc.md#fn_plugin),
+[clouds](source/clouds.md#fn_plugin), [view](source/view.md#fn_plugin),
+[ui](source/ui.md#fn_plugin), [ops](source/ops.md#fn_plugin).
 
-- **`Art`**: handles to every font and texture, shared by all modules.
-  `Art::text(bold, size)` returns a font *list*: DejaVu Sans Mono, then the
-  Japanese subset, then emoji, so one string can mix all three (Bevy falls back
-  glyph by glyph).
-- **Procedural textures**, drawn pixel by pixel at start-up so no file is needed:
-  `dot` (soft white circle: bubbles, glints, glow), `frame` (a 24×14 data frame
-  with a header bar and two payload lines), `pill` and `pill_border` (the cloud body
-  and its outline, anti-aliased).
-- **`Rng`**: a tiny [xorshift64*](https://en.wikipedia.org/wiki/Xorshift) random
-  generator. Why not the `rand` crate: on the web, `rand` needs `getrandom`,
-  which needs JavaScript glue and feature flags. The game does not need secure
-  randomness, so twelve lines of maths avoid all that. A fixed seed means the same
-  sequence each load (fine for now; see [Decisions](decisions.md)).
+`main.rs` also holds the shared pieces:
 
-**Window settings:** `canvas: "#lm-canvas"` attaches to the page's canvas,
-`fit_canvas_to_parent` follows its size, `prevent_default_event_handling` stops
-the browser scrolling or zooming the page on wheel and touch, and
-`composite_alpha_mode: Opaque` tells the browser the canvas has no transparency
-(see the UI trap in [Interface](interface.md)).
+- **[`Art`](source/main.md#struct_art)**: handles to every font and texture.
+  [`Art::text`](source/main.md#impl_art) returns a font *list* (DejaVu Sans Mono,
+  then a Japanese subset, then emoji) so one string can mix all three; Bevy falls
+  back glyph by glyph.
+- **Textures drawn in code** at startup, so no image file is needed:
+  - [`dot`](source/main.md#fn_dot): a soft white circle, used for bubbles, glints and glows;
+  - [`frame`](source/main.md#fn_frame): a 24×14 data frame with a header bar and two payload lines;
+  - [`pill`](source/main.md#fn_pill): the cloud body and its anti-aliased outline.
+- **[`Rng`](source/main.md#struct_rng)**: a 12-line
+  [xorshift64*](https://en.wikipedia.org/wiki/Xorshift) random generator. Why not
+  the standard `rand` crate? On the web it needs `getrandom`, which needs
+  JavaScript glue and feature flags. The game does not need secure randomness, so
+  twelve lines of maths avoid all of that.
 
-## Schedules: when each system runs
+**Window settings**, explained:
+- `canvas: "#lm-canvas"` attaches to the page's canvas.
+- `fit_canvas_to_parent` follows its size.
+- `prevent_default_event_handling` stops the browser scrolling or zooming the page
+  when you use the wheel or pinch.
+- `composite_alpha_mode: Opaque` tells the browser the canvas has no
+  transparency. Without it, panels turned see-through
+  ([the story](interface.md#traps_found_while_building_it)).
 
-Bevy runs systems in **schedules**. Start-up ones run once, in order
-`PreStartup` → `Startup` → `PostStartup`; then `Update` runs every frame.
+## When each system runs
+
+Bevy runs systems in **schedules** ([docs](https://docs.rs/bevy/0.20.0/bevy/?search=Schedule)).
+`PreStartup` → `Startup` → `PostStartup` run once; `Update` runs every frame.
 
 | Schedule | Systems | Why there |
 |---|---|---|
-| PreStartup | `load_art` | Everything else needs fonts and textures |
-| Startup | world: terrain, islands, backdrop, decorations, nodes · water: spawn · npc: first critters · clouds: spawn · view: camera · ui: welcome screen · ops: `setup_net` | Build the world once |
-| PostStartup | ops: `spawn_overlay` (links, frames, badges, the monkey) | Needs the node cards spawned in Startup to exist so it can attach badges to them |
-| OnEnter(Playing) | ui: zoom buttons + hint bar · ops: shift HUD | UI that only exists after the welcome screen |
-| Update, always | water animation + river frames · critters (tick, place) · clouds (drift, rain, storm) · ops visuals (links, frames, cards, popups, monkey token) | The world stays alive behind the welcome screen |
-| Update, Welcome | ui: progress bar, proceed | |
-| Update, Playing | view: mouse, touch, keys, zoom buttons, camera follow · ui: pointer-over-UI, buttons, zoom label, panel · ops (chained, in this order): `controls → walk → work → clock → strikes → hud → alert_list → live_ttls` | Input and game logic |
+| PreStartup | [`load_art`](source/main.md#fn_load_art) | everything else needs fonts and textures |
+| Startup | world: [terrain](source/world.md#fn_spawn_terrain), [islands](source/world.md#fn_spawn_islands), [backdrop](source/world.md#fn_spawn_backdrop), [decorations](source/world.md#fn_spawn_decorations), [nodes](source/world.md#fn_spawn_nodes) · [water](source/water.md#fn_spawn) · [critters](source/npc.md#fn_spawn_start) · [clouds](source/clouds.md#fn_spawn) · [camera](source/view.md#fn_spawn_camera) · [welcome screen](source/ui.md#fn_spawn_welcome) · [network](source/ops.md#fn_setup_net) | build the world once |
+| PostStartup | [`spawn_overlay`](source/ops.md#fn_spawn_overlay): links, frames, badges, the monkey | needs the node cards from Startup to exist, to attach badges |
+| OnEnter(Playing) | zoom buttons and hint bar ([ui](source/ui.md#fn_spawn_hud)) · shift HUD ([ops](source/ops.md#fn_spawn_hud)) · [`apply_link`](source/ops.md#fn_apply_link) | UI that exists only after the welcome screen; deep links |
+| Update, always | water animation and river frames · critters · clouds · link colours, frames, cards, popups, monkey | the world stays alive behind the welcome screen |
+| Update, Welcome | progress bar, [proceed](source/ui.md#fn_proceed) | |
+| Update, Playing | camera input · panel · the game, **chained**: [`controls`](source/ops.md#fn_controls) → [`walk`](source/ops.md#fn_walk) → [`work`](source/ops.md#fn_work) → [`clock`](source/ops.md#fn_clock) → [`strikes`](source/ops.md#fn_strikes) → [`hud`](source/ops.md#fn_hud) → [`alert_list`](source/ops.md#fn_alert_list) → [`live_ttls`](source/ops.md#fn_live_ttls) | input, then logic, then the screen, in a fixed order every frame |
 
-The ops systems are **chained** so a frame is deterministic: read input, move
-the monkey, finish work, advance the clock and spawn trouble, apply lightning,
-then draw the HUD from the final state.
+## Rendering: depth in a 2D isometric world
 
-## Rendering: how depth works in a 2D isometric game
-
-There is one 2D camera (`Camera2d`, orthographic: no perspective). In 2D, Bevy
-sorts what it draws by the **z** of each entity's position: higher z is drawn
-later, on top. Getting isometric overlap right is entirely about choosing z.
+There is one 2D camera ([`Camera2d`](https://docs.rs/bevy/0.20.0/bevy/?search=Camera2d),
+orthographic, so there is no perspective). In 2D, Bevy sorts what it draws by each
+entity's **z**: higher z is drawn later, on top. Getting isometric overlap right is
+entirely about choosing z well. The fridge's
+[3D Math & Graphics lessons on projection](https://go.fridge.run/certs/learn/graphics3d?n=4)
+and [visibility](https://go.fridge.run/certs/learn/graphics3d?n=5) are good background.
 
 | z | What |
 |---|---|
-| −100 | the tiled grid backdrop (the "void") |
+| −100 | the tiled grid backdrop: the void |
 | −50 | translucent edge islands |
-| x + y (about −10 to 90) | terrain: **one mesh per diagonal row** |
-| row + 0.5 / ± small offsets | things standing on a cell: decorations, critters, water effects, river frames |
+| x + y (about −10 to 90) | terrain, **one mesh per diagonal row** |
+| row + 0.5, ± small offsets | things standing on a cell: decorations, critters, water effects, river frames |
 | 150 | ghosts (float above everything on the ground) |
 | 198 / 199 | link lines / link frames |
-| 200 + (x+y)/100 | node cards (+ badges as children) |
+| 200 + (x+y)/100 | node cards (badges are children) |
 | 230 | the monkey |
 | 250 | score popups |
 | 300+ | clouds |
 
-**Why one mesh per diagonal row:** in an isometric view, a cell at grid (x, y)
-is in front of everything with a smaller x + y. Putting each row's tiles into one
-mesh at z = x + y, and anything standing on that row at z = x + y + 0.5, makes a tall
-block in front correctly hide a critter behind it. Per-tile sprites would work
-too, but 1,700 tiles as ~90 meshes is far cheaper to draw. See [The world](world.md).
+**Why one mesh per diagonal row:** in an isometric view, cell (x, y) is in front of
+everything with a smaller x + y. Each row's tiles go into one
+[`Mesh2d`](https://docs.rs/bevy/0.20.0/bevy/?search=Mesh2d) at z = x + y
+([`fn spawn_terrain`](source/world.md#fn_spawn_terrain)), and anything standing on
+that row goes at z = x + y + 0.5 ([`fn row_z`](source/world.md#fn_row_z)). A tall
+block in front then correctly hides a critter behind it. Per-tile sprites would
+also work, but ~1,100 tiles as 72 meshes is far cheaper to draw.
+[The world](world.md) has the details.
 
-The **UI** (HUD, panels, buttons) is a separate system, `bevy_ui`, drawn in its
-own pass after the world, using a flexbox layout engine ([Taffy](https://github.com/DioxusLabs/taffy)).
+The **interface** (HUD, panels, buttons) is a separate system, `bevy_ui`
+([`Node`](https://docs.rs/bevy/0.20.0/bevy/?search=Node)). It is drawn in its own
+pass after the world and laid out with flexbox by
+[Taffy](https://github.com/DioxusLabs/taffy).
 
 ## Bevy 0.20 specifics worth knowing
 
-- `Button` is deprecated in 0.20 in favour of picking + `ui_widgets`. The code
-  attaches `Interaction::default()` to clickable nodes instead and reads
-  `Changed<Interaction>`. That is why `ui.rs` and `ops.rs` start with
-  `#![allow(deprecated)]`. Migration is on the [roadmap](decisions.md).
-- `Single<...>` is a query that expects exactly one match (the camera, the HUD).
-- Messages are registered with `add_message::<T>()` and used through
-  `MessageWriter` / `MessageReader`.
-- Fonts are `FontSource::List` for fallback chains; sizes are `FontSize::Px`.
-- Only the Bevy features the game needs are compiled in (see `game/Cargo.toml`):
-  2D, UI, PNG, mouse/touch/keyboard, WebGL2, default font. Dropping 3D, audio
-  and the rest keeps the wasm smaller and compiles faster.
+- **`Button` is deprecated** in 0.20 in favour of picking + `ui_widgets`. The code
+  attaches [`Interaction`](https://docs.rs/bevy/0.20.0/bevy/?search=Interaction)
+  to clickable nodes and reads `Changed<Interaction>` instead. That is why `ui.rs`
+  and `ops.rs` start with `#![allow(deprecated)]`. Migrating is on the
+  [roadmap](decisions.md#roadmap_ideas).
+- **[`Single`](https://docs.rs/bevy/0.20.0/bevy/?search=Single)** is a query that
+  expects exactly one match (the camera, the HUD text).
+- **Messages** are registered with `add_message::<T>()`.
+- **Fonts:** `FontSource::List` for fallback chains; sizes are `FontSize::Px`.
+- **Only the features the game needs** are compiled in ([`Cargo.toml`](source/cargo-toml.md)):
+  2D, UI, PNG, mouse/touch/keyboard, WebGL2, the default font. Leaving out 3D,
+  audio and the rest keeps the wasm smaller and the build faster.
 
-Next: [The world](world.md)
+Next: [The world](world.md) · Back to the [documentation](index.md)
