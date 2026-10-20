@@ -51,7 +51,7 @@ use crate::world::{NodeCard, World};
 ### const MIN_ZOOM
 
 ```rust
-pub const MIN_ZOOM: f32 = 0.5;
+pub const MIN_ZOOM: f32 = 0.35;
 ```
 
 ### const MAX_ZOOM

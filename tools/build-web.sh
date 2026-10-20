@@ -15,4 +15,5 @@ python3 tools/gen-world.py
 rm -rf web/game
 wasm-bindgen --target web --no-typescript --out-dir web/game game/target/wasm32-unknown-unknown/release/luckymonkey.wasm
 mkdir -p web/game/data && cp game/data/*.json web/game/data/
+cp public/sfx.js web/sfx.js
 echo "built: serve web/ (e.g. python3 -m http.server -d web 8080)"

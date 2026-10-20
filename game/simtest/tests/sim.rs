@@ -268,3 +268,27 @@ fn l_summary_explains_right_and_wrong() {
     assert!(!sim.notes_good.is_empty(), "{:?}", sim.notes_good);
     assert_eq!(sim.score, sim.stats.points_fix + sim.stats.points_prevent + sim.stats.points_combo);
 }
+
+#[test]
+fn o_difficulty_length_and_campaigns() {
+    use lm_simtest::sim::{bytes_tb, si};
+    let mut sim = new_sim(7);
+    sim.rules.outage_secs = 1e9;
+    // Jungle Legend, Quick: a 4-minute shift with campaigns and hotter numbers.
+    sim.start_with(3, 0);
+    assert_eq!(sim.shift_secs, 240.0);
+    assert!(sim.ttl_mult() < sim.rules.director.levels[3].ttl_mult);
+    let calm = sim.heat();
+    run_until(&mut sim, 130.0, |_| false);
+    assert!(sim.heat() > calm, "heat should rise over the shift");
+    assert!(sim.log.iter().any(|e| e.text.starts_with("CAMPAIGN")), "a campaign should have started by 40%");
+    assert!(sim.cues.iter().any(|(c, _)| *c == Cat::Critical));
+    run_until(&mut sim, 200.0, |s| s.phase != Phase::Running);
+    assert_eq!(sim.phase, Phase::Done);
+    // A plain start() is the old behaviour: rules' shift length, no difficulty.
+    sim.start(2);
+    assert!(sim.diff.is_none() && sim.shift_secs == sim.rules.shift_secs);
+    assert_eq!(bytes_tb(3200.0), "3.2 PB");
+    assert_eq!(bytes_tb(1.8), "1.8 TB");
+    assert_eq!(si(2.4e12, "bps"), "2.4 Tbps");
+}

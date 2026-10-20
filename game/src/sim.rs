@@ -93,6 +93,13 @@ pub struct FaultDef {
     /// Not before this fraction of the shift.
     #[serde(default)]
     pub min_progress: f32,
+    /// Attack footprint template ({bw} {pps} {rps} {bots} {size} {records} {conns}),
+    /// rolled bigger as the shift heats up.
+    #[serde(default)]
+    pub footprint: String,
+    /// What a diagnosis turns up: real-looking command output, line by line.
+    #[serde(default)]
+    pub evidence: Vec<String>,
 }
 
 fn one() -> f32 {
@@ -260,6 +267,57 @@ pub struct Rules {
     /// Node kind -> what it does, in plain words (tour, panel).
     #[serde(default)]
     pub roles: HashMap<String, String>,
+    /// Picked in the new-shift popup.
+    #[serde(default)]
+    pub difficulties: Vec<Difficulty>,
+    #[serde(default)]
+    pub lengths: Vec<Length>,
+    /// Coordinated attack waves on the harder difficulties.
+    #[serde(default)]
+    pub campaigns: Vec<Campaign>,
+}
+
+/// A difficulty: a director level plus multipliers on top of it.
+#[derive(Deserialize, Clone, Debug)]
+pub struct Difficulty {
+    pub name: String,
+    pub emoji: String,
+    #[serde(default)]
+    pub blurb: String,
+    /// Director level (1 = the scripted training shift).
+    pub level: usize,
+    #[serde(default = "one")]
+    pub ttl_mult: f32,
+    #[serde(default = "one")]
+    pub interval_mult: f32,
+    /// Extra root causes allowed open at once.
+    #[serde(default)]
+    pub roots_add: f32,
+    /// Coordinated attack waves happen.
+    #[serde(default)]
+    pub campaigns: bool,
+    /// Starting heat: how big the numbers are (0-1).
+    #[serde(default)]
+    pub heat: f32,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Length {
+    pub name: String,
+    pub secs: f32,
+    #[serde(default)]
+    pub blurb: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Campaign {
+    /// Fraction of the shift at which it begins.
+    pub at: f32,
+    pub emoji: String,
+    pub name: String,
+    pub text: String,
+    /// Fault kinds raised together, each on its own node.
+    pub faults: Vec<String>,
 }
 
 fn run_default() -> f32 {
@@ -341,6 +399,8 @@ pub struct Fault {
     pub story: String,
     /// A banana bought the answer.
     pub hinted: bool,
+    /// Rolled attack footprint ("1.2 Tbps · 380 Mpps"), empty if none.
+    pub footprint: String,
 }
 
 impl Fault {
@@ -508,6 +568,8 @@ pub struct Stats {
     pub spreads: u32,
     pub escalated_warnings: u32,
     pub recovery_total: f32,
+    /// Terabytes of recovered space (fixes and preventions).
+    pub recovered_tb: f64,
     pub max_open: u32,
     pub critical_secs: f32,
     /// action key -> times it fixed something
@@ -588,6 +650,15 @@ pub struct Sim {
     tutorial_open: Vec<u32>,
     next_id: u32,
     pub version: u32,
+    /// Difficulty picked for this shift (None: the plain level).
+    pub diff: Option<Difficulty>,
+    pub shift_secs: f32,
+    campaign_next: usize,
+    /// Event categories since the game last looked (sound cues), with their node.
+    pub cues: Vec<(Cat, Option<usize>)>,
+    /// Recovered space from the latest fix (TB).
+    pub last_recovered: f64,
+    pub peak_threat: &'static str,
 }
 
 fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -648,7 +719,14 @@ impl Sim {
             tutorial_open: Vec::new(),
             next_id: 1,
             version: 0,
+            diff: None,
+            shift_secs: 0.0,
+            campaign_next: 0,
+            cues: Vec::new(),
+            last_recovered: 0.0,
+            peak_threat: "QUIET",
         };
+        sim.shift_secs = sim.rules.shift_secs;
         sim.spawn_workers();
         sim
     }
@@ -695,7 +773,7 @@ impl Sim {
     // ------------------------------------------------------------ queries
 
     pub fn progress(&self) -> f32 {
-        (self.clock / self.rules.shift_secs).clamp(0.0, 1.0)
+        (self.clock / self.shift_secs.max(1.0)).clamp(0.0, 1.0)
     }
     pub fn level_def(&self) -> &Level {
         let l = &self.rules.director.levels;
@@ -806,6 +884,9 @@ impl Sim {
     fn say(&mut self, cat: Cat, icon: &str, text: String, node: Option<usize>, worker: Option<usize>, group: Option<String>) {
         let e = Event { t: self.clock, cat, icon: icon.into(), text, node, worker, group, count: 1 };
         push_event(&mut self.log, e);
+        if self.cues.len() < 32 {
+            self.cues.push((cat, node));
+        }
         self.version = self.version.wrapping_add(1);
     }
 
@@ -873,12 +954,32 @@ impl Sim {
 
     // ------------------------------------------------------------ shift
 
+    /// A plain shift at a director level (practice, tests, deep links).
     pub fn start(&mut self, level: usize) {
+        self.diff = None;
+        self.shift_secs = self.rules.shift_secs;
+        self.begin(level);
+    }
+
+    /// A shift picked in the popup: difficulty and length by index.
+    pub fn start_with(&mut self, diff: usize, length: usize) {
+        let d = self.rules.difficulties.get(diff).cloned();
+        self.shift_secs = self.rules.lengths.get(length).map_or(self.rules.shift_secs, |l| l.secs);
+        let level = d.as_ref().map_or(1, |d| d.level);
+        self.diff = d;
+        self.begin(level);
+    }
+
+    fn begin(&mut self, level: usize) {
         self.level = level.min(self.rules.director.levels.len() - 1);
         self.phase = Phase::Running;
         self.clock = 0.0;
         self.faults.iter_mut().for_each(|f| *f = None);
         self.stats = Stats::default();
+        self.campaign_next = 0;
+        self.cues.clear();
+        self.last_recovered = 0.0;
+        self.peak_threat = "QUIET";
         self.bananas = self.rules.bananas_start;
         self.score = 0;
         self.combo = 0;
@@ -902,7 +1003,7 @@ impl Sim {
             w.active = crew.is_empty() || crew.contains(&w.name);
         }
         self.recompute();
-        let name = self.level_def().name.clone();
+        let name = self.shift_name();
         self.say(Cat::Shift, "🕘", format!("09:00 shift started ({name}). Keep the jungle network up until 17:00."), None, None, None);
     }
 
@@ -913,7 +1014,7 @@ impl Sim {
         }
         let Some(def) = self.rules.fault(kind).cloned() else { return false };
         let warning = warning && def.warning.is_some();
-        let ttl_mult = self.level_def().ttl_mult;
+        let ttl_mult = self.ttl_mult();
         let ttl = if warning { def.warning.as_ref().unwrap().ttl } else { def.ttl } * ttl_mult;
         let id = self.next_id;
         self.next_id += 1;
@@ -925,7 +1026,9 @@ impl Sim {
             let k = self.below(def.origin.len());
             def.origin[k].replace("{node}", &name)
         };
+        let footprint = if def.footprint.is_empty() || warning { String::new() } else { self.roll_footprint(&def.footprint) };
         self.faults[node] = Some(Fault {
+            footprint,
             id,
             root: root.unwrap_or(id),
             kind: kind.to_string(),
@@ -997,6 +1100,7 @@ impl Sim {
             cause: Some((f.id, from)),
             story: effect.clone(),
             hinted: false,
+            footprint: String::new(),
         });
         self.stats.spreads += 1;
         self.say(Cat::Cascade, "📉", format!("{nname} is failing because of {oname}: {effect}"), Some(node), None, Some(format!("sym{}", f.id)));
@@ -1379,6 +1483,15 @@ impl Sim {
         }
         self.step_faults(dt);
         self.director();
+        let t = self.threat().1;
+        let rank = |x: &str| ["QUIET", "PROBING", "SKIRMISH", "CYBERSTORM"].iter().position(|y| *y == x).unwrap_or(0);
+        if rank(t) > rank(self.peak_threat) {
+            self.peak_threat = t;
+            if rank(t) >= 2 {
+                let (e, _) = self.threat();
+                self.say(Cat::Critical, e, format!("Threat level {t}: the jungle is getting busy. Bigger floods, bigger stakes."), None, None, Some("threat".into()));
+            }
+        }
         // SLA: time-averaged network health.
         self.sla_sum += self.health_now * dt;
         self.sla = if self.clock > 0.0 { self.sla_sum / self.clock } else { 100.0 };
@@ -1396,7 +1509,7 @@ impl Sim {
             self.phase = Phase::Collapsed;
             self.note(false, format!("Network health stayed under {:.0}% for {:.0}s: the shift ended early", self.rules.outage_floor, self.rules.outage_secs));
             self.say(Cat::Critical, "💥", "Major outage: the network stayed below the outage floor too long. Shift over.".into(), None, None, None);
-        } else if self.clock >= self.rules.shift_secs {
+        } else if self.clock >= self.shift_secs {
             self.phase = Phase::Done;
             let met = self.sla >= self.rules.sla_target;
             self.say(
@@ -1533,7 +1646,7 @@ impl Sim {
                 self.reward(false, f.ttl.max(0.0));
                 let learned = self.learn(&def.concept, format!("{} at {nname}", def.name));
                 self.say(Cat::Resolved, "✅", format!("{nname} restored: {}. {}", alabel, r.note), Some(node), Some(w), None);
-                let full = def.ttl * self.level_def().ttl_mult;
+                let full = def.ttl * self.ttl_mult();
                 if f.diagnosed {
                     self.note(true, format!("Diagnosed {} at {nname} first, then fixed the cause", def.name));
                 } else if f.stage != Stage::Down && f.ttl > full * 0.5 {
@@ -1606,6 +1719,92 @@ impl Sim {
         }
         self.stats.points_combo += total.saturating_sub(base as u32);
         self.bananas += if prevent { self.rules.banana_prevent } else { self.rules.banana_fix };
+        // Every save frees up (or keeps) space; the numbers grow as the shift heats up.
+        let u = self.rand();
+        let tb = 10f64.powf((0.2 + self.heat() as f64 * 3.3 + u as f64 * 0.6).min(5.2));
+        self.last_recovered = tb;
+        self.stats.recovered_tb += tb;
+    }
+
+    /// Effective Time to Loss multiplier: the level's times the difficulty's.
+    pub fn ttl_mult(&self) -> f32 {
+        self.level_def().ttl_mult * self.diff.as_ref().map_or(1.0, |d| d.ttl_mult)
+    }
+
+    fn max_roots(&self) -> usize {
+        let lvl = self.level_def();
+        let add = self.diff.as_ref().map_or(0.0, |d| d.roots_add);
+        (lvl.max_roots[0] + (lvl.max_roots[1] - lvl.max_roots[0]) * self.progress() + add).floor().max(1.0) as usize
+    }
+
+    /// "Operator · Standard" (or the level's name for practice and tests).
+    pub fn shift_name(&self) -> String {
+        match &self.diff {
+            Some(d) => {
+                let len = self.rules.lengths.iter().find(|l| l.secs == self.shift_secs).map_or(String::new(), |l| format!(" · {}", l.name));
+                format!("{} {}{len}", d.emoji, d.name)
+            }
+            None => self.level_def().name.clone(),
+        }
+    }
+
+    /// How hot the shift is (0 calm .. ~1.3 all-out): scales footprints and recovered space.
+    pub fn heat(&self) -> f32 {
+        let base = self.diff.as_ref().map_or(0.0, |d| d.heat);
+        (base + self.progress() * 0.8 + self.active_roots() as f32 * 0.06).clamp(0.0, 1.3)
+    }
+
+    /// The war-room name for the heat.
+    pub fn threat(&self) -> (&'static str, &'static str) {
+        match self.heat() {
+            h if h < 0.25 => ("🌤", "QUIET"),
+            h if h < 0.5 => ("🔭", "PROBING"),
+            h if h < 0.8 => ("⚡", "SKIRMISH"),
+            _ => ("🌩", "CYBERSTORM"),
+        }
+    }
+
+    /// Fill a footprint template with sizes that match the heat.
+    fn roll_footprint(&mut self, t: &str) -> String {
+        let h = self.heat() as f64;
+        let mut s = t.to_string();
+        for (key, lo, span, unit) in [("{bw}", 1.3, 3.2, "bps"), ("{pps}", 6.3, 2.9, "pps"), ("{rps}", 4.5, 2.8, "rps"), ("{bots}", 3.3, 3.0, ""), ("{records}", 5.0, 3.6, ""), ("{conns}", 3.8, 2.6, "")] {
+            if s.contains(key) {
+                let u = self.rand() as f64;
+                let v = 10f64.powf(lo + span * (h * 0.8 + u * 0.25));
+                let txt = if key == "{bw}" { si(v * 1e9, unit) } else { si(v, unit) };
+                s = s.replace(key, &txt);
+            }
+        }
+        if s.contains("{size}") {
+            let u = self.rand() as f64;
+            s = s.replace("{size}", &bytes_tb(10f64.powf(-0.5 + 4.2 * (h * 0.8 + u * 0.25))));
+        }
+        s
+    }
+
+    /// Coordinated waves: on the hard difficulties, a named campaign hits several nodes at once.
+    fn campaign(&mut self, p: f32) {
+        if !self.diff.as_ref().is_some_and(|d| d.campaigns) || self.level_def().practice {
+            return;
+        }
+        let Some(c) = self.rules.campaigns.get(self.campaign_next).cloned() else { return };
+        if p < c.at {
+            return;
+        }
+        self.campaign_next += 1;
+        self.say(Cat::Critical, &c.emoji, format!("CAMPAIGN · {}: {}", c.name, c.text), None, None, Some("campaign".into()));
+        for k in &c.faults {
+            let Some(d) = self.rules.fault(k) else { continue };
+            let kinds = d.kinds.clone();
+            let free: Vec<usize> = (0..self.nodes.len())
+                .filter(|&i| self.faults[i].is_none() && self.health[i] == Health::Online && i != self.core && (kinds.is_empty() || kinds.contains(&self.nodes[i].kind)))
+                .collect();
+            if !free.is_empty() {
+                let i = free[self.below(free.len())];
+                self.raise(i, k, false, None);
+            }
+        }
     }
 
     fn after_resolve(&mut self, id: u32) {
@@ -1661,7 +1860,7 @@ impl Sim {
                             let d = self.rules.fault(&kind).cloned().unwrap();
                             f.kind = kind;
                             f.stage = Stage::Incident;
-                            f.ttl = d.ttl * self.level_def().ttl_mult;
+                            f.ttl = d.ttl * self.ttl_mult();
                             f.ttl_full = f.ttl;
                             f.cascades = 0;
                             f.options = self.options_for(&d, false);
@@ -1747,11 +1946,12 @@ impl Sim {
             }
             return;
         }
+        self.campaign(p);
         if self.clock < self.next_root || self.clock < self.grace_until {
             return;
         }
-        let max_roots = (lvl.max_roots[0] + (lvl.max_roots[1] - lvl.max_roots[0]) * p).floor().max(1.0) as usize;
-        let interval = lvl.interval[0] + (lvl.interval[1] - lvl.interval[0]) * p;
+        let max_roots = self.max_roots();
+        let interval = (lvl.interval[0] + (lvl.interval[1] - lvl.interval[0]) * p) * self.diff.as_ref().map_or(1.0, |d| d.interval_mult);
         if self.active_roots() >= max_roots || self.health_now < self.rules.director.health_floor * 100.0 {
             // Not now: look again shortly.
             self.next_root = self.clock + 5.0;
@@ -1800,8 +2000,7 @@ impl Sim {
         if self.phase != Phase::Running || self.clock < self.grace_until || self.level_def().tutorial && self.tutorial < self.rules.tutorial.len() {
             return false;
         }
-        let lvl = self.level_def();
-        let max_roots = (lvl.max_roots[0] + (lvl.max_roots[1] - lvl.max_roots[0]) * self.progress()).floor().max(1.0) as usize;
+        let max_roots = self.max_roots();
         if self.active_roots() >= max_roots || !self.rules.faults.contains_key("power") {
             return false;
         }
@@ -1837,9 +2036,23 @@ impl Sim {
             format!("Incidents resolved: {}  ·  prevented: {}  ·  mitigations: {}", s.resolved, s.prevented, s.mitigations),
             format!("Outages: {}  ·  spread events: {}  ·  avg recovery: {:.0}s", s.outages, s.spreads, avg),
             format!("Most effective action: {best}"),
+            format!("💾 Recovered space: {}  ·  biggest threat level: {}", bytes_tb(s.recovered_tb), self.peak_threat),
             format!("Still open at the end: {still_open}"),
             format!("Concepts learned: {}", if concepts.is_empty() { "—".into() } else { concepts.join(", ") }),
             format!("Tip: {tip}"),
         ]
     }
+}
+
+/// 3.2e12 -> "3.2 T" + unit.
+pub fn si(v: f64, unit: &str) -> String {
+    let (d, p) = [(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "k")].into_iter().find(|(d, _)| v >= *d).unwrap_or((1.0, ""));
+    let x = v / d;
+    if x >= 100.0 { format!("{x:.0} {p}{unit}") } else { format!("{x:.1} {p}{unit}") }.trim_end().to_string()
+}
+
+/// Terabytes, written the way a storage admin would.
+pub fn bytes_tb(tb: f64) -> String {
+    let (x, u) = if tb >= 1000.0 * 1000.0 { (tb / 1e6, "EB") } else if tb >= 1000.0 { (tb / 1000.0, "PB") } else if tb >= 1.0 { (tb, "TB") } else { (tb * 1000.0, "GB") };
+    if x >= 100.0 { format!("{x:.0} {u}") } else { format!("{x:.1} {u}") }
 }

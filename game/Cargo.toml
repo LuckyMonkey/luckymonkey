@@ -21,6 +21,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }
 # Live data: data.rs reads window.LM_DATA (fetched JSON) at startup.
 js-sys = "0.3"
+wasm-bindgen = "0.2"
 
 [profile.release]
 opt-level = "s"

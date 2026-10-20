@@ -13,7 +13,8 @@ use bevy::prelude::*;
 
 use crate::clouds::Strike;
 use crate::data::tuning;
-use crate::sim::{self, Cat, Health, Phase, Sim, SimNode, Stage};
+use crate::sfx;
+use crate::sim::{self, bytes_tb, Cat, Health, Phase, Sim, SimNode, Stage};
 use crate::ui::{Blocks, GREEN_300, GREEN_400, GREEN_500, GREEN_900, RED_400, RED_500};
 use crate::view::ViewState;
 use crate::world::{emoji_text, iso, node_color, NodeCard, World, NODE_Z};
@@ -48,6 +49,19 @@ pub struct Game {
     /// Scores of every shift played (this browser), newest last.
     history: Vec<Played>,
     recorded: bool,
+    /// The clock is stopped (P).
+    pub paused: bool,
+    /// The new-shift popup is open, with the picks in it.
+    setup_open: bool,
+    pick_diff: usize,
+    pick_len: usize,
+    /// Real time the terminal was last busy or hovered (it fades after).
+    term_seen: f32,
+    /// Characters of the command typed so far (for key clicks).
+    typed: usize,
+    sel_prev: Option<usize>,
+    music_at: f32,
+    sound_on: bool,
 }
 
 /// One response as a terminal session: a typed command, its output, a verdict.
@@ -194,6 +208,30 @@ struct SummaryPanel;
 struct SummaryText;
 #[derive(Component)]
 struct SummaryButton;
+#[derive(Component)]
+struct SetupPanel;
+#[derive(Component)]
+struct DiffButton(usize);
+#[derive(Component)]
+struct LenButton(usize);
+#[derive(Component)]
+struct SetupBegin;
+#[derive(Component)]
+struct SetupCancel;
+#[derive(Component)]
+struct SetupBlurb;
+#[derive(Component)]
+struct RunRow;
+#[derive(Component)]
+struct PauseButton;
+#[derive(Component)]
+struct PauseLabel;
+#[derive(Component)]
+struct MuteButton;
+#[derive(Component)]
+struct MuteLabel;
+#[derive(Component)]
+struct PausedOverlay;
 /// A node's stand-in pinned to the screen edge while the node is off screen.
 #[derive(Component)]
 struct EdgePin(usize);
@@ -226,10 +264,10 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
         .add_systems(Update, (links, frames, cards, popups, worker_tokens))
-        .add_systems(Update, (phone_column, pins, pin_clicks, terminal, guide, summary, tour_card).run_if(in_state(Screen::Playing)))
+        .add_systems(Update, (phone_column, pins, pin_clicks, terminal, guide, summary, tour_card, setup_panel, sounds).run_if(in_state(Screen::Playing)))
         .add_systems(
             Update,
-            (navigate, controls, tick, strikes, hud, ttl_box, roster, alert_list, feed, live_ttls).chain().run_if(in_state(Screen::Playing)),
+            (meta_controls, navigate, controls, tick, strikes, hud, ttl_box, roster, alert_list, feed, live_ttls).chain().run_if(in_state(Screen::Playing)),
         );
 }
 
@@ -288,6 +326,15 @@ fn setup(mut commands: Commands, world: Res<World>, mut rng: ResMut<Rng>) {
         tour_order,
         history: load_history(),
         recorded: false,
+        paused: false,
+        setup_open: false,
+        pick_diff: 0,
+        pick_len: tuning().rules.lengths.iter().position(|l| l.secs == tuning().rules.shift_secs).unwrap_or(0),
+        term_seen: 0.0,
+        typed: 0,
+        sel_prev: None,
+        music_at: 0.0,
+        sound_on: sfx::enabled(),
     });
 }
 
@@ -377,7 +424,7 @@ fn spawn_overlay(mut commands: Commands, game: Res<Game>, art: Res<Art>, world: 
     }
     for (w, wk) in game.sim.workers.iter().enumerate() {
         commands
-            .spawn((WorkerToken(w), emoji_text(&art, &wk.emoji, 34.0), Transform::from_translation(Vec2::from(wk.pos).extend(NODE_Z + 30.0)).with_scale(Vec3::splat(0.5))))
+            .spawn((WorkerToken(w), emoji_text(&art, &wk.emoji, 34.0), Transform::from_translation(Vec2::from(wk.pos).extend(NODE_Z + 30.0)).with_scale(Vec3::splat(WORKER_SCALE))))
             .with_children(|c| {
                 c.spawn((Text2d::new(wk.name.to_uppercase()), art.text(true, 16.0), TextColor(TEXT), Transform::from_xyz(0.0, -36.0, 0.01)))
                     .with_child(plate(&art, Vec2::new(wk.name.len() as f32 * 11.0 + 20.0, 24.0), 0.75));
@@ -537,6 +584,9 @@ fn cards(
     }
 }
 
+/// Crew tokens are drawn a little larger than the critters.
+const WORKER_SCALE: f32 = 0.62;
+
 fn worker_tokens(
     time: Res<Time>,
     game: Res<Game>,
@@ -562,7 +612,7 @@ fn worker_tokens(
         // Stand beside the card; each worker on its own side so they don't overlap.
         let side = [Vec2::new(36.0, 30.0), Vec2::new(-36.0, 34.0), Vec2::new(0.0, -46.0), Vec2::new(40.0, -30.0), Vec2::new(-40.0, -26.0)][tok.0 % 5];
         tf.translation = (Vec2::from(w.pos) + side + Vec2::Y * hop).extend(NODE_Z + 30.0 + tok.0 as f32 * 0.1);
-        tf.scale = Vec3::splat(0.5);
+        tf.scale = Vec3::splat(WORKER_SCALE);
     }
     for (bar, mut tf, mut vis) in &mut bars {
         match sim.busy(bar.0) {
@@ -577,14 +627,14 @@ fn worker_tokens(
     }
 }
 
-fn popup(commands: &mut Commands, art: &Art, at: Vec2, text: String, color: Color, now: f32) {
+fn popup(commands: &mut Commands, art: &Art, at: Vec2, text: String, color: Color, now: f32, lift: f32) {
     let w = text.chars().count() as f32 * 13.0 + 28.0;
     commands.spawn((
         Popup { born: now },
         Text2d::new(text),
         art.text(true, 22.0),
         TextColor(color),
-        Transform::from_translation((at + Vec2::Y * 50.0).extend(NODE_Z + 50.0)).with_scale(Vec3::splat(0.5)),
+        Transform::from_translation((at + Vec2::Y * (50.0 + lift)).extend(NODE_Z + 50.0)).with_scale(Vec3::splat(0.5)),
     ))
     .with_child(plate(art, Vec2::new(w, 34.0), 0.85));
 }
@@ -593,20 +643,58 @@ fn popups(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &Popup,
     let now = time.elapsed_secs();
     for (e, p, mut tf, mut color) in &mut q {
         let age = now - p.born;
-        if age > 2.5 {
+        if age > 3.5 {
             commands.entity(e).despawn();
             continue;
         }
         tf.translation.y += 20.0 * time.delta_secs();
-        color.0 = color.0.with_alpha((2.5 - age).min(1.0));
+        color.0 = color.0.with_alpha((3.5 - age).min(1.0));
     }
 }
 
 // ------------------------------------------------------------------ simulation + input
 
 fn tick(mut commands: Commands, time: Res<Time>, art: Res<Art>, world: Res<World>, mut game: ResMut<Game>) {
+    if game.paused {
+        return;
+    }
+    let was = game.sim.phase;
     game.sim.step(time.delta_secs().min(0.25));
     terminal_feed(&mut game, &world);
+    if was == Phase::Running && game.sim.phase != Phase::Running {
+        sfx::play(if game.sim.phase == Phase::Done && game.sim.sla >= game.sim.rules.sla_target { "complete" } else { "gameover" });
+    }
+    // Sound cues, and attack footprints floating up from where they hit.
+    let cues = std::mem::take(&mut game.sim.cues);
+    let mut played: Vec<&str> = Vec::new();
+    for (cat, node) in cues {
+        let cue = match cat {
+            Cat::Incident => "alarm",
+            Cat::Warning => "warn",
+            Cat::Cascade => "spread",
+            Cat::Critical => "critical",
+            Cat::Resolved => "fix",
+            Cat::Mitigated => "mitigate",
+            Cat::NoEffect => "fail",
+            Cat::Recover => "recover",
+            Cat::Learn => "learn",
+            Cat::Shift => "shift",
+            Cat::Dispatch => "dispatch",
+            Cat::Notice => "notice",
+            _ => "",
+        };
+        if !cue.is_empty() && !played.contains(&cue) {
+            played.push(cue);
+            sfx::play(cue);
+        }
+        if let (Cat::Incident, Some(n)) = (cat, node) {
+            if let Some(f) = game.sim.faults[n].as_ref().filter(|f| !f.footprint.is_empty()) {
+                let emoji = game.sim.rules.fault(&f.kind).map_or(String::new(), |d| d.emoji.clone());
+                let text = format!("{emoji} {}", f.footprint);
+                popup(&mut commands, &art, game.vec(n), text, RED_400, time.elapsed_secs(), 34.0);
+            }
+        }
+    }
     // A new outcome: a floating note on the map too.
     if let Some(o) = game.sim.outcome.clone() {
         if o.t != game.outcome_seen {
@@ -619,13 +707,17 @@ fn tick(mut commands: Commands, time: Res<Time>, art: Res<Art>, world: Res<World
                 ("no effect".to_string(), RED_400)
             };
             let at = game.vec(o.node);
-            popup(&mut commands, &art, at, text, color, time.elapsed_secs());
+            let text = if o.ok && !o.title.starts_with("MITIGATED") && !o.title.starts_with("DIAGNOSED") { format!("{text} · 💾 {}", bytes_tb(game.sim.last_recovered)) } else { text };
+            popup(&mut commands, &art, at, text, color, time.elapsed_secs(), 0.0);
         }
     }
 }
 
 fn strikes(mut reader: MessageReader<Strike>, mut rng: ResMut<Rng>, mut game: ResMut<Game>) {
     for Strike(at) in reader.read() {
+        if game.paused {
+            continue;
+        }
         let Some((i, d)) = (0..game.sim.nodes.len()).map(|i| (i, game.vec(i).distance(*at))).min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
         if d <= tuning().lightning_range && rng.f32() < tuning().lightning_chance {
             game.sim.lightning(i);
@@ -727,6 +819,9 @@ fn controls(
     practice_button: Query<&Interaction, (With<PracticeButton>, Changed<Interaction>)>,
     tour_button: Query<&Interaction, (With<TourButton>, Changed<Interaction>)>,
 ) {
+    if game.setup_open || game.paused {
+        return;
+    }
     // The network tour: outside shifts, step through every node.
     if let Some(i) = game.tour {
         let n = game.tour_order.len();
@@ -782,12 +877,15 @@ fn controls(
             return;
         }
         let practice = keys.just_pressed(KeyCode::KeyP) || practice_button.iter().any(|i| *i == Interaction::Pressed);
-        if practice || start_button.iter().any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) {
+        let start = start_button.iter().any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter);
+        if practice || (start && game.sim.rules.difficulties.is_empty()) {
             let level = if practice { 0 } else { game.next_level };
             game.sim.start(level);
-            game.chosen = None;
-            game.term = None;
-            game.recorded = false;
+            fresh_shift(&mut game);
+        } else if start {
+            // Pick difficulty and length first.
+            game.setup_open = true;
+            sfx::play("open");
         }
         return;
     }
@@ -858,6 +956,123 @@ fn controls(
     }
 }
 
+fn fresh_shift(game: &mut Game) {
+    game.chosen = None;
+    game.term = None;
+    game.recorded = false;
+    game.paused = false;
+}
+
+/// Before the other controls: the new-shift popup, pause (P) and sound (M).
+#[allow(clippy::too_many_arguments)]
+fn meta_controls(
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut game: ResMut<Game>,
+    diffs: Query<(&Interaction, &DiffButton), Changed<Interaction>>,
+    lens: Query<(&Interaction, &LenButton), Changed<Interaction>>,
+    begin: Query<&Interaction, (With<SetupBegin>, Changed<Interaction>)>,
+    cancel: Query<&Interaction, (With<SetupCancel>, Changed<Interaction>)>,
+    pause: Query<&Interaction, (With<PauseButton>, Changed<Interaction>)>,
+    mute: Query<&Interaction, (With<MuteButton>, Changed<Interaction>)>,
+) {
+    let pressed = |i: &Interaction| *i == Interaction::Pressed;
+    if keys.just_pressed(KeyCode::KeyM) || mute.iter().any(pressed) {
+        game.sound_on = sfx::toggle();
+    }
+    if game.setup_open {
+        let (nd, nl) = (game.sim.rules.difficulties.len(), game.sim.rules.lengths.len().max(1));
+        for (i, d) in &diffs {
+            if pressed(i) {
+                game.pick_diff = d.0;
+            }
+        }
+        for (i, l) in &lens {
+            if pressed(i) {
+                game.pick_len = l.0;
+            }
+        }
+        if keys.just_pressed(KeyCode::ArrowRight) {
+            game.pick_diff = (game.pick_diff + 1) % nd;
+        }
+        if keys.just_pressed(KeyCode::ArrowLeft) {
+            game.pick_diff = (game.pick_diff + nd - 1) % nd;
+        }
+        if keys.just_pressed(KeyCode::ArrowDown) {
+            game.pick_len = (game.pick_len + 1) % nl;
+        }
+        if keys.just_pressed(KeyCode::ArrowUp) {
+            game.pick_len = (game.pick_len + nl - 1) % nl;
+        }
+        if keys.just_pressed(KeyCode::Escape) || cancel.iter().any(pressed) {
+            game.setup_open = false;
+        } else if keys.just_pressed(KeyCode::Enter) || begin.iter().any(pressed) {
+            game.setup_open = false;
+            let (d, l) = (game.pick_diff, game.pick_len);
+            game.sim.start_with(d, l);
+            fresh_shift(&mut game);
+        }
+        // The popup had these keys: nothing else should act on them this frame.
+        for k in [KeyCode::Enter, KeyCode::Escape, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::ArrowUp, KeyCode::ArrowDown] {
+            keys.clear_just_pressed(k);
+        }
+        return;
+    }
+    if game.sim.phase == Phase::Running && game.tour.is_none() && (keys.just_pressed(KeyCode::KeyP) || keys.just_pressed(KeyCode::Pause) || pause.iter().any(pressed)) {
+        game.paused = !game.paused;
+        sfx::play(if game.paused { "pause" } else { "resume" });
+        keys.clear_just_pressed(KeyCode::KeyP);
+    }
+}
+
+/// The new-shift popup and the paused overlay.
+#[allow(clippy::type_complexity)]
+fn setup_panel(
+    game: Res<Game>,
+    mut panel: Single<&mut Node, (With<SetupPanel>, Without<PausedOverlay>)>,
+    mut overlay: Single<&mut Node, (With<PausedOverlay>, Without<SetupPanel>)>,
+    blurb: Single<Entity, With<SetupBlurb>>,
+    mut texts: Query<&mut Text>,
+    mut diffs: Query<(&DiffButton, &mut BorderColor, &mut BackgroundColor), Without<LenButton>>,
+    mut lens: Query<(&LenButton, &mut BorderColor, &mut BackgroundColor), Without<DiffButton>>,
+) {
+    panel.display = if game.setup_open { Display::Flex } else { Display::None };
+    overlay.display = if game.paused && game.sim.phase == Phase::Running { Display::Flex } else { Display::None };
+    if !game.setup_open {
+        return;
+    }
+    let on = |yes: bool| if yes { (BorderColor::all(AMBER), BackgroundColor(Color::srgb(0.25, 0.17, 0.0))) } else { (BorderColor::all(GREEN_500.with_alpha(0.4)), BackgroundColor(Color::srgb(0.0, 0.06, 0.02))) };
+    for (d, mut b, mut bg) in &mut diffs {
+        (*b, *bg) = on(d.0 == game.pick_diff);
+    }
+    for (l, mut b, mut bg) in &mut lens {
+        (*b, *bg) = on(l.0 == game.pick_len);
+    }
+    let r = &game.sim.rules;
+    let d = r.difficulties.get(game.pick_diff).map_or(String::new(), |d| format!("{} {}: {}", d.emoji, d.name, d.blurb));
+    let l = r.lengths.get(game.pick_len).map_or(String::new(), |l| format!("⏱ {}: {}", l.name, l.blurb));
+    set(&mut texts, *blurb, format!("{d}\n{l}"));
+}
+
+/// Interface sounds: clicks, picking a node, and music that tracks the threat.
+fn sounds(time: Res<Time>, mut game: ResMut<Game>, view: Res<ViewState>, buttons: Query<&Interaction, (Changed<Interaction>, Without<Blocks>)>) {
+    if buttons.iter().any(|i| *i == Interaction::Pressed) {
+        sfx::play("click");
+    }
+    if view.selected != game.sel_prev {
+        if view.selected.is_some() {
+            sfx::play("select");
+        }
+        game.sel_prev = view.selected;
+    }
+    let now = time.elapsed_secs();
+    if now - game.music_at > 0.5 {
+        game.music_at = now;
+        let sim = &game.sim;
+        let level = if sim.phase == Phase::Running && !game.paused { 0.2 + sim.heat() + sim.open_faults() as f32 * 0.04 } else { 0.0 };
+        sfx::ambient(level);
+    }
+}
+
 // ------------------------------------------------------------------ HUD
 
 fn boxed() -> impl Bundle {
@@ -876,6 +1091,7 @@ fn boxed() -> impl Bundle {
 }
 
 fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Query<&Window>) {
+    spawn_setup(&mut commands, &art, &game);
     let width = windows.iter().next().map_or(1280.0, |w| w.width());
     let narrow = width < 760.0;
     // Phones: the Time to Loss timer runs across the top, the column sits under it
@@ -904,6 +1120,21 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                 b.spawn((Node { width: percent(100), height: px(4), border_radius: BorderRadius::MAX, overflow: Overflow::clip(), ..default() }, BackgroundColor(GREEN_900.with_alpha(0.6))))
                     .with_child((HudBar, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GREEN_500)));
                 b.spawn((HintText, Text::new(""), art.text(true, 12.0), TextColor(AMBER)));
+                b.spawn((RunRow, Node { display: Display::None, column_gap: px(6), ..default() })).with_children(|r| {
+                    for (pause, label) in [(true, "⏸ Pause (P)"), (false, "🔊 Sound (M)")] {
+                        let mut e = r.spawn((
+                            Interaction::default(),
+                            Node { padding: UiRect::axes(px(10), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                            BorderColor::all(GREEN_500.with_alpha(0.5)),
+                            BackgroundColor(GREEN_900.with_alpha(0.3)),
+                        ));
+                        if pause {
+                            e.insert(PauseButton).with_child((PauseLabel, Text::new(label), art.text(true, 11.0), TextColor(GREEN_300)));
+                        } else {
+                            e.insert(MuteButton).with_child((MuteLabel, Text::new(label), art.text(true, 11.0), TextColor(GREEN_300)));
+                        }
+                    }
+                });
                 b.spawn((StartRow, Node { column_gap: px(6), row_gap: px(6), flex_wrap: FlexWrap::Wrap, ..default() })).with_children(|r| {
                     r.spawn((
                         StartButton,
@@ -1128,6 +1359,104 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
         });
 }
 
+/// The new-shift popup: difficulty, then length, then begin.
+fn spawn_setup(commands: &mut Commands, art: &Art, game: &Game) {
+    let r = &game.sim.rules;
+    commands
+        .spawn((Node { position_type: PositionType::Absolute, top: px(0), bottom: px(0), left: px(0), right: px(0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, GlobalZIndex(75)))
+        .with_children(|c| {
+            c.spawn((
+                SetupPanel,
+                Blocks,
+                Interaction::default(),
+                Node {
+                    display: Display::None,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(10),
+                    width: px(600),
+                    max_width: percent(94),
+                    max_height: percent(92),
+                    overflow: Overflow::scroll_y(),
+                    padding: UiRect::all(px(18)),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(12)),
+                    ..default()
+                },
+                BorderColor::all(GREEN_500),
+                BackgroundColor(Color::srgb(0.0, 0.02, 0.01)),
+            ))
+            .with_children(|p| {
+                p.spawn((Text::new("🐵 NEW SHIFT"), art.text(true, 16.0), TextColor(GREEN_400)));
+                p.spawn((Text::new("DIFFICULTY  ← →"), art.text(true, 11.0), TextColor(GREEN_300.with_alpha(0.8))));
+                p.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|row| {
+                    for (i, d) in r.difficulties.iter().enumerate() {
+                        let sub = match i {
+                            0 => "coached",
+                            1 => "steady",
+                            2 => "campaigns",
+                            _ => "chaos",
+                        };
+                        row.spawn((
+                            DiffButton(i),
+                            Interaction::default(),
+                            Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, flex_grow: 1.0, min_width: px(110), padding: UiRect::axes(px(8), px(8)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(8)), ..default() },
+                            BorderColor::all(GREEN_500.with_alpha(0.4)),
+                            BackgroundColor(Color::srgb(0.0, 0.06, 0.02)),
+                            children![(Text::new(format!("{} {}", d.emoji, d.name)), art.text(true, 13.0), TextColor(GREEN_300)), (Text::new(sub), art.text(false, 10.0), TextColor(TEXT.with_alpha(0.8)))],
+                        ));
+                    }
+                });
+                p.spawn((Text::new("SHIFT LENGTH  ↑ ↓"), art.text(true, 11.0), TextColor(GREEN_300.with_alpha(0.8))));
+                p.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|row| {
+                    for (i, l) in r.lengths.iter().enumerate() {
+                        row.spawn((
+                            LenButton(i),
+                            Interaction::default(),
+                            Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, flex_grow: 1.0, min_width: px(110), padding: UiRect::axes(px(8), px(8)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(8)), ..default() },
+                            BorderColor::all(GREEN_500.with_alpha(0.4)),
+                            BackgroundColor(Color::srgb(0.0, 0.06, 0.02)),
+                            children![(Text::new(l.name.clone()), art.text(true, 13.0), TextColor(GREEN_300)), (Text::new(mmss(l.secs)), art.text(false, 10.0), TextColor(TEXT.with_alpha(0.8)))],
+                        ));
+                    }
+                });
+                p.spawn((SetupBlurb, Text::new(""), art.text(false, 12.0), TextColor(TEXT)));
+                p.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+                    row.spawn((
+                        SetupBegin,
+                        Interaction::default(),
+                        Node { flex_grow: 1.0, padding: UiRect::axes(px(12), px(9)), justify_content: JustifyContent::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                        BorderColor::all(GREEN_500),
+                        BackgroundColor(GREEN_900.with_alpha(0.8)),
+                        children![(Text::new("▶ BEGIN SHIFT (Enter)"), art.text(true, 13.0), TextColor(GREEN_400))],
+                    ));
+                    row.spawn((
+                        SetupCancel,
+                        Interaction::default(),
+                        Node { padding: UiRect::axes(px(12), px(9)), justify_content: JustifyContent::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::MAX, ..default() },
+                        BorderColor::all(SLATE),
+                        BackgroundColor(Color::srgb(0.03, 0.03, 0.04)),
+                        children![(Text::new("Back (Esc)"), art.text(true, 13.0), TextColor(TEXT))],
+                    ));
+                });
+            });
+        });
+    // Paused: a calm card in the middle; the map stays visible around it.
+    commands
+        .spawn((Node { position_type: PositionType::Absolute, top: px(0), bottom: px(0), left: px(0), right: px(0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, GlobalZIndex(74)))
+        .with_children(|c| {
+            c.spawn((
+                PausedOverlay,
+                Node { display: Display::None, flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(6), padding: UiRect::axes(px(28), px(16)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(12)), ..default() },
+                BorderColor::all(AMBER),
+                BackgroundColor(Color::srgb(0.08, 0.06, 0.0)),
+                children![
+                    (Text::new("⏸ PAUSED"), art.text(true, 26.0), TextColor(AMBER)),
+                    (Text::new("The jungle holds its breath. P to resume."), art.text(false, 12.0), TextColor(TEXT)),
+                ],
+            ));
+        });
+}
+
 fn tour_card(game: Res<Game>, world: Res<World>, mut card: Single<&mut Node, With<TourCard>>, text: Single<Entity, With<TourText>>, mut texts: Query<&mut Text>) {
     let Some(i) = game.tour else {
         card.display = Display::None;
@@ -1189,10 +1518,13 @@ fn next_step(game: &Game, view: &ViewState) -> String {
     }
     match sim.phase {
         Phase::Idle if game.tour.is_some() => return "🧭 Touring: → next, ← back, Esc to stop. Nothing breaks during the tour.".into(),
-        Phase::Idle => return "▶ Enter: training shift · P: practice, no pressure · T: tour the network first".into(),
+        Phase::Idle => return "▶ Enter: pick a shift · P: practice, no pressure · T: tour the network first".into(),
         Phase::Done | Phase::Collapsed if game.tour.is_some() => return "🧭 Touring: → next, ← back, Esc to stop.".into(),
         Phase::Done | Phase::Collapsed => return "▶ Shift over: read the summary, then Enter for the next one (P: practice, T: tour).".into(),
         Phase::Running => {}
+    }
+    if game.paused {
+        return "⏸ Paused: P resumes.".into();
     }
     if let Some(c) = sim.coach() {
         return format!("🎓 {c}");
@@ -1225,25 +1557,35 @@ fn hud(
     start_label: Single<Entity, With<StartLabel>>,
     mut bar: Single<(&mut Node, &mut BackgroundColor), With<HudBar>>,
     mut start_node: Single<&mut Node, (With<StartRow>, Without<HudBar>)>,
+    mut run_node: Single<&mut Node, (With<RunRow>, Without<HudBar>, Without<StartRow>)>,
+    pause_label: Single<Entity, With<PauseLabel>>,
+    mute_label: Single<Entity, With<MuteLabel>>,
 ) {
     let sim = &game.sim;
     let line = match sim.phase {
         Phase::Idle => "🐵 LUCKY MONKEY ON-CALL\nKeep the jungle network running until 17:00.".to_string(),
         _ => format!(
-            "🕘 SHIFT {} → 17:00   ★ {}{}   🍌 {}\n💚 NETWORK HEALTH {:.0}%   📈 SHIFT SLA {:.1}% (target {:.0}%)",
-            clock_str(sim.clock, sim.rules.shift_secs),
+            "🕘 SHIFT {} → 17:00   ★ {}{}   🍌 {}\n💚 NETWORK HEALTH {:.0}%   📈 SHIFT SLA {:.1}% (target {:.0}%)\n{} THREAT {}   💾 RECOVERED SPACE {}",
+            clock_str(sim.clock, sim.shift_secs),
             sim.score,
             if sim.combo > 1 { format!(" 🔥×{}", sim.combo) } else { String::new() },
             sim.bananas,
             sim.health_now,
             sim.sla,
             sim.rules.sla_target,
+            sim.threat().0,
+            sim.threat().1,
+            bytes_tb(sim.stats.recovered_tb),
         ),
     };
+    run_node.display = if sim.phase == Phase::Running { Display::Flex } else { Display::None };
+    set(&mut texts, *pause_label, if game.paused { "▶ Resume (P)".into() } else { "⏸ Pause (P)".into() });
+    set(&mut texts, *mute_label, if game.sound_on { "🔊 Sound (M)".into() } else { "🔇 Muted (M)".into() });
     set(&mut texts, *hud_text, line);
     set(&mut texts, *hint_text, next_step(&game, &view));
     start_node.display = if sim.phase == Phase::Running { Display::None } else { Display::Flex };
     let label = match sim.phase {
+        Phase::Idle if !sim.rules.difficulties.is_empty() => "START SHIFT (Enter)".into(),
         Phase::Idle => format!("START {} (Enter)", sim.rules.director.levels[game.next_level.min(sim.rules.director.levels.len() - 1)].name.to_uppercase()),
         _ => "NEXT SHIFT (Enter)".into(),
     };
@@ -1441,7 +1783,7 @@ fn feed(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut
         b.spawn((Text::new("NETWORK LOG"), art.text(true, 10.0), TextColor(GREEN_400.with_alpha(0.8))));
         for e in sim::feed(&sim.log, sim.clock, 8, 40.0) {
             let count = if e.count > 1 { format!(" ×{}", e.count) } else { String::new() };
-            let line = format!("{} {} {} {}{count}", clock_str(e.t, sim.rules.shift_secs), e.icon, e.cat.tag(), e.text);
+            let line = format!("{} {} {} {}{count}", clock_str(e.t, sim.shift_secs), e.icon, e.cat.tag(), e.text);
             let mut row = b.spawn((Text::new(line), art.text(false, 11.0), TextColor(cat_color(e.cat))));
             if let Some(n) = e.node {
                 row.insert((FeedRow(n), Interaction::default()));
@@ -1477,7 +1819,19 @@ fn terminal_feed(game: &mut Game, world: &World) {
         let fill = |s: &str| s.replace("{node}", &node.id).replace("{ip}", &node.ip);
         let (cmd, lines) = if r.action == "diagnose" {
             let symptom = sim.fault_def(r.node).map_or(String::new(), |d| d.symptom.clone());
-            (fill("journalctl -u {node} -n 200 && netcheck {node}"), vec!["collecting logs, ports, routes and counters…".to_string(), format!("observed: {symptom}"), "matching against known failure patterns…".to_string()])
+            let footprint = sim.faults[r.node].as_ref().map_or(String::new(), |f| f.footprint.clone());
+            let mut lines = vec!["collecting logs, ports, routes and counters…".to_string()];
+            // Real-looking evidence first, then what it adds up to.
+            let warning = sim.faults[r.node].as_ref().is_some_and(|f| f.is_warning());
+            for l in sim.fault_def(r.node).filter(|_| !warning).map_or(&[][..], |d| &d.evidence[..]) {
+                lines.push(fill(l).replace("{bw}", footprint.split(" · ").next().unwrap_or("")));
+            }
+            if !footprint.is_empty() {
+                lines.push(format!("📡 footprint: {footprint}"));
+            }
+            lines.push(format!("observed: {symptom}"));
+            lines.push("matching against known failure patterns…".to_string());
+            (fill("journalctl -u {node} -n 200 && netcheck {node}"), lines)
         } else {
             let a = sim.rules.action(&r.action);
             let cmd = a.map(|a| a.cmd.clone()).filter(|c| !c.is_empty()).unwrap_or_else(|| format!("{} {{node}}", r.action));
@@ -1509,6 +1863,7 @@ fn terminal_feed(game: &mut Game, world: &World) {
         game.term = Some(Term { run: r.id, start: sim.clock, total: r.total, prompt: format!("{emoji} {wname}@{}:~$ {cmd}", node.id), lines, verdict: None, done_at: None });
         game.last_run = r.id;
         game.term_hidden = false;
+        game.typed = 0;
     }
     let clock = game.sim.clock;
     let Some(term) = game.term.as_mut() else { return };
@@ -1529,6 +1884,9 @@ fn terminal_feed(game: &mut Game, world: &World) {
                 ("❌ NOT THE FIX · the problem is still there", RED_400)
             };
             let mut v = format!("{head}\nCause: {}\n{}", o.cause, o.action);
+            if color == GREEN_400 && !o.title.starts_with("DIAGNOSED") {
+                v += &format!("\n💾 recovered space: {}", bytes_tb(game.sim.last_recovered));
+            }
             if let Some(l) = &o.learned {
                 v += &format!("\n📖 {l}");
             }
@@ -1539,29 +1897,49 @@ fn terminal_feed(game: &mut Game, world: &World) {
     term.done_at = Some(clock);
 }
 
+/// Seconds the finished terminal stays up, then how long it takes to fade.
+const TERM_HOLD: f32 = 2.5;
+const TERM_FADE: f32 = 0.8;
+
 /// The terminal card: the command types itself out, its output streams in,
-/// then the verdict. Click or Esc hides it; the next run brings it back.
+/// then the verdict. A couple of seconds later it fades away; moving the mouse
+/// back over it brings it back (then it fades again). Esc fades it now.
+#[allow(clippy::too_many_arguments)]
 fn terminal(
+    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut game: ResMut<Game>,
-    mut card: Single<(&mut Node, &mut BorderColor, &Interaction), With<OutcomeCard>>,
+    mut card: Single<(Entity, &mut Node, &mut BorderColor, &mut BackgroundColor, &Interaction, Has<Blocks>), With<OutcomeCard>>,
     body: Single<Entity, With<OutcomeText>>,
     verdict: Single<Entity, With<TermVerdict>>,
     mut texts: Query<&mut Text>,
     mut colors: Query<&mut TextColor>,
 ) {
-    let (node, border, interaction) = &mut *card;
-    if **interaction == Interaction::Pressed || keys.just_pressed(KeyCode::Escape) {
-        game.term_hidden = true;
+    let now = time.elapsed_secs();
+    let (card_e, node, border, bg, interaction, blocks) = &mut *card;
+    let busy = game.term.as_ref().is_some_and(|t| t.verdict.is_none()) && !game.paused;
+    if busy || matches!(**interaction, Interaction::Hovered | Interaction::Pressed) {
+        game.term_seen = now;
     }
-    let clock = game.sim.clock;
+    if keys.just_pressed(KeyCode::Escape) && !game.setup_open {
+        game.term_seen = -100.0;
+    }
     let show = game.sim.phase == Phase::Running && game.tour.is_none() && !game.term_hidden;
-    let Some(t) = game.term.as_ref().filter(|t| show && t.done_at.is_none_or(|d| clock - d < 10.0)) else {
+    let Some(t) = game.term.as_ref().filter(|_| show) else {
         node.display = Display::None;
         return;
     };
     node.display = Display::Flex;
+    let alpha = 1.0 - ((now - game.term_seen - TERM_HOLD) / TERM_FADE).clamp(0.0, 1.0);
+    // Faded out it stays hoverable but no longer swallows clicks meant for the map.
+    if alpha <= 0.0 && *blocks {
+        commands.entity(*card_e).remove::<Blocks>();
+    } else if alpha > 0.0 && !*blocks {
+        commands.entity(*card_e).insert(Blocks);
+    }
+    bg.0 = Color::srgba(0.0, 0.02, 0.0, 0.97 * alpha);
+    let clock = game.sim.clock;
     let el = clock - t.start;
     // A third of the run types the command, the rest streams the output.
     let typing = (t.total * 0.35).max(0.4);
@@ -1585,11 +1963,22 @@ fn terminal(
     }
     set(&mut texts, *body, s);
     let (v, c) = t.verdict.clone().unwrap_or((String::new(), GREEN_400));
+    let has_verdict = t.verdict.is_some();
     set(&mut texts, *verdict, v);
     if let Ok(mut col) = colors.get_mut(*verdict) {
-        col.0 = c;
+        col.0 = c.with_alpha(alpha);
     }
-    **border = BorderColor::all(if t.verdict.is_some() { c } else { GREEN_500.with_alpha(0.7) });
+    if let Ok(mut col) = colors.get_mut(*body) {
+        col.0 = Color::srgb(0.55, 0.95, 0.6).with_alpha(alpha);
+    }
+    **border = BorderColor::all(if has_verdict { c } else { GREEN_500.with_alpha(0.7) }.with_alpha(alpha));
+    // Key clicks while the command types itself.
+    if shown > game.typed {
+        if shown < n && !game.paused {
+            sfx::play("key");
+        }
+        game.typed = shown;
+    }
 }
 
 fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut<Seen>, panel: Single<(Entity, &mut Node, Option<&Children>), With<GuidePanel>>) {
@@ -1636,7 +2025,7 @@ fn summary(mut game: ResMut<Game>, mut panel: Single<&mut Node, With<SummaryPane
     if !game.recorded {
         game.recorded = true;
         let sim = &game.sim;
-        let entry = Played { name: sim.level_def().name.clone(), score: sim.score, sla: sim.sla, met: sim.phase == Phase::Done && sim.sla >= sim.rules.sla_target };
+        let entry = Played { name: sim.shift_name(), score: sim.score, sla: sim.sla, met: sim.phase == Phase::Done && sim.sla >= sim.rules.sla_target };
         game.history.push(entry);
         let keep = game.history.len().saturating_sub(20);
         game.history.drain(0..keep);
@@ -1646,15 +2035,19 @@ fn summary(mut game: ResMut<Game>, mut panel: Single<&mut Node, With<SummaryPane
         let met = game.sim.phase == Phase::Done && game.sim.sla >= game.sim.rules.sla_target;
         if game.sim.level > 0 && met {
             game.next_level = (game.sim.level + 1).min(levels - 1);
+            // A met shift suggests the next difficulty (up to Veteran; Legend is a choice).
+            if game.sim.diff.is_some() && game.pick_diff < 2 {
+                game.pick_diff += 1;
+            }
         }
     }
     let sim = &game.sim;
     let title = if sim.phase == Phase::Done && sim.sla >= sim.rules.sla_target {
-        format!("🌅 SHIFT COMPLETE · SLA met · {}", sim.level_def().name)
+        format!("🌅 SHIFT COMPLETE · SLA met · {}", sim.shift_name())
     } else if sim.phase == Phase::Done {
-        format!("🌇 SHIFT OVER · SLA target missed ({:.1}% of {:.0}%) · {}", sim.sla, sim.rules.sla_target, sim.level_def().name)
+        format!("🌇 SHIFT OVER · SLA target missed ({:.1}% of {:.0}%) · {}", sim.sla, sim.rules.sla_target, sim.shift_name())
     } else {
-        format!("💥 GAME OVER · major outage at {} · {}", clock_str(sim.clock, sim.rules.shift_secs), sim.level_def().name)
+        format!("💥 GAME OVER · major outage at {} · {}", clock_str(sim.clock, sim.shift_secs), sim.shift_name())
     };
     let st = &sim.stats;
     let mut s = format!(
@@ -1685,7 +2078,10 @@ fn summary(mut game: ResMut<Game>, mut panel: Single<&mut Node, With<SummaryPane
         s += &format!("  #{:<2} {:<22} ★ {:>5}  SLA {:>5.1}% {}{mark}\n", k + 1, p.name, p.score, p.sla, if p.met { "✓" } else { "✗" });
     }
     let levels = sim.rules.director.levels.len();
-    s += &format!("\nNext: {} (levels advance when the SLA target is met)", sim.rules.director.levels[game.next_level.min(levels - 1)].name);
+    match sim.rules.difficulties.get(game.pick_diff) {
+        Some(d) => s += &format!("\nNext: {} {} suggested (you pick difficulty and length when you start)", d.emoji, d.name),
+        None => s += &format!("\nNext: {} (levels advance when the SLA target is met)", sim.rules.director.levels[game.next_level.min(levels - 1)].name),
+    }
     set(&mut texts, *text, s);
 }
 
@@ -1781,6 +2177,9 @@ pub fn alert_box(body: &mut ChildSpawnerCommands, art: &Art, game: &Game, node: 
         b.spawn((Text::new(text), art.text(false, 12.0), TextColor(Color::srgb(1.0, 0.92, 0.86))));
         if !f.story.is_empty() {
             b.spawn((Text::new(format!("🧭 How it started: {}", f.story)), art.text(false, 11.0), TextColor(Color::srgb(0.75, 0.88, 1.0))));
+        }
+        if !f.footprint.is_empty() {
+            b.spawn((Text::new(format!("📡 Footprint: {}", f.footprint)), art.text(true, 11.0), TextColor(RED_400)));
         }
         if !hurting.is_empty() {
             b.spawn((Text::new(format!("📉 Already hurting: {}", hurting.join(", "))), art.text(false, 11.0), TextColor(AMBER)));

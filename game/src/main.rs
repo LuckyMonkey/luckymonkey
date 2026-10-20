@@ -8,6 +8,7 @@ mod data;
 mod link;
 mod npc;
 mod ops;
+mod sfx;
 mod sim;
 mod ui;
 mod view;

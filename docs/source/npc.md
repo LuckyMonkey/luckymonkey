@@ -4,11 +4,13 @@ title: Lucky Monkey source - npc.rs
 
 # Source: game/src/npc.rs
 
-**Wandering critters: monkeys, ghosts, bananas, lizards, crocodiles.** Explained in [world](../world.md). 195 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/npc.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**Wandering critters: monkeys, ghosts, bananas, lizards, crocodiles.** Explained in [world](../world.md). 211 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/npc.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
-Wandering critters: monkeys, ghosts, bananas, lizards, crocodiles.
+Wandering critters: monkeys, ghosts, bananas, lizards, crocodiles, and the
+quieter folk: turtles and ducks paddling the water, bees and butterflies
+drifting over the canopy, snails and hedgehogs pottering about.
 
 Logic ticks every 80 ms like the original; sprites glide toward the logical
 position every frame and stand on whatever terrain is under them.
@@ -57,19 +59,19 @@ const STEP_SECS: f32 = 0.08;
 ### const MAX_ACTIVE
 
 ```rust
-const MAX_ACTIVE: usize = 20;
+const MAX_ACTIVE: usize = 30;
 ```
 
 ### const SPAWN_CHANCE
 
 ```rust
-const SPAWN_CHANCE: f32 = 0.16;
+const SPAWN_CHANCE: f32 = 0.2;
 ```
 
 ### const START_COUNT
 
 ```rust
-const START_COUNT: usize = 12;
+const START_COUNT: usize = 22;
 ```
 
 ### const LIFESPANS
@@ -87,13 +89,13 @@ const DIRS: [(f32, f32); 8] = [(0., -1.), (1., -1.), (1., 0.), (1., 1.), (0., 1.
 ### const MAP_MIN
 
 ```rust
-const MAP_MIN: f32 = 5.0;
+const MAP_MIN: f32 = -5.0;
 ```
 
 ### const MAP_MAX
 
 ```rust
-const MAP_MAX: f32 = 35.0;
+const MAP_MAX: f32 = 85.0;
 ```
 
 ### struct NpcIn
@@ -145,6 +147,12 @@ enum Kind {
     Banana,
     Lizard,
     Crocodile,
+    /// Turtles, ducks: water only, slow, a gentle bob.
+    Swimmer,
+    /// Bees, butterflies: drift over anything, hover above it.
+    Flyer,
+    /// Snails, hedgehogs: land, unhurried.
+    Potterer,
 }
 ```
 
@@ -158,6 +166,9 @@ impl Kind {
             "banana" => Kind::Banana,
             "lizard" => Kind::Lizard,
             "crocodile" => Kind::Crocodile,
+            "swimmer" | "turtle" | "duck" => Kind::Swimmer,
+            "flyer" | "bee" | "butterfly" => Kind::Flyer,
+            "potterer" | "snail" | "hedgehog" => Kind::Potterer,
             _ => Kind::Monkey,
         }
     }
@@ -168,6 +179,9 @@ impl Kind {
             Kind::Ghost | Kind::Banana => 0.05,
             Kind::Lizard => 0.03,
             Kind::Crocodile => 0.01,
+            Kind::Swimmer => 0.015,
+            Kind::Flyer => 0.08,
+            Kind::Potterer => 0.04,
         }
     }
 }
@@ -249,8 +263,8 @@ fn tick(
             let in_bounds = (MAP_MIN..=MAP_MAX).contains(&nx) && (MAP_MIN..=MAP_MAX).contains(&ny);
             let ok = in_bounds
                 && match npc.kind {
-                    Kind::Banana => true,
-                    Kind::Lizard | Kind::Crocodile => world.tile_at(nx, ny).is_some_and(|t| t.kind == kind::WATER),
+                    Kind::Banana | Kind::Flyer => true,
+                    Kind::Lizard | Kind::Crocodile | Kind::Swimmer => world.tile_at(nx, ny).is_some_and(|t| t.kind == kind::WATER),
                     _ => world.tile_at(nx, ny).is_some(),
                 };
             if ok {
@@ -259,7 +273,7 @@ fn tick(
             } else {
                 npc.dir = (npc.dir + 4) % 8;
             }
-            if (ok || npc.kind == Kind::Banana) && rng.f32() < npc.kind.wander() {
+            if (ok || matches!(npc.kind, Kind::Banana | Kind::Flyer)) && rng.f32() < npc.kind.wander() {
                 npc.dir = rng.below(8);
             }
         }
@@ -294,6 +308,8 @@ fn place(time: Res<Time>, world: Res<World>, mut npcs: Query<(&mut Npc, &mut Tra
         let mut p = shown;
         match npc.kind {
             Kind::Banana => p.y += (t * 10.0).sin() * 5.0,
+            Kind::Swimmer => p.y += (t * 1.6 + npc.x).sin() * 1.5 - 6.0,
+            Kind::Flyer => p += Vec2::new((t * 2.3 + npc.y).sin() * 6.0, 26.0 + (t * 5.0 + npc.x).sin() * 4.0),
             Kind::Ghost => {
                 p.y += (t * 3.0).sin() * 4.0;
                 color.0 = Color::srgba(1.0, 1.0, 1.0, 0.7 + (t * 2.0).sin() * 0.3);
@@ -309,7 +325,7 @@ fn place(time: Res<Time>, world: Res<World>, mut npcs: Query<(&mut Npc, &mut Tra
             color.0 = color.0.with_alpha(color.0.alpha() * fade);
         }
         // Ghosts float above everything; the rest are depth-sorted with the terrain.
-        let z = if npc.kind == Kind::Ghost { 150.0 } else { row_z(npc.x, npc.y) };
+        let z = if matches!(npc.kind, Kind::Ghost | Kind::Flyer) { 150.0 } else { row_z(npc.x, npc.y) };
         tf.translation = p.extend(z);
         *vis = Visibility::Inherited;
     }

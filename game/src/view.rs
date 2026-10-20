@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crate::Screen;
 use crate::world::{NodeCard, World};
 
-pub const MIN_ZOOM: f32 = 0.5;
+pub const MIN_ZOOM: f32 = 0.35;
 pub const MAX_ZOOM: f32 = 2.5;
 const DRAG_THRESHOLD: f32 = 6.0;
 

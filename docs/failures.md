@@ -42,6 +42,16 @@ Every section has a ▶ **live** link that starts a shift with that fault staged
 | 🔁 [Routing loop](#routing_loop) | advanced | 45 s | 🧭 Correct the routing table | 🔄 Restart the service (20 s) | no | symptoms |
 | 📢 [Broadcast storm](#broadcast_storm) | advanced | 40 s | 🌲 Enable Spanning Tree | — | no | symptoms |
 | 🏝️ [VLAN misconfiguration](#vlan_misconfiguration) | advanced | 55 s | 🏝️ Move ports to the right VLAN | — | no | symptoms |
+| 🗺️ [BGP route hijack](#bgp_route_hijack) | network | 45 s | 🛡️ Enforce RPKI origin validation | 📣 Announce more-specific /24s (40 s) | no | symptoms |
+| 🔒 [Ransomware](#ransomware) | security | 45 s | 🧊 Restore from immutable backups | 🚧 Quarantine on an isolated VLAN (40 s) | yes: 📡 → 🚧 Quarantine on an isolated VLAN, 🕳️ Sinkhole the C2 domain + rotate keys | symptoms |
+| 🗝️ [Credential stuffing](#credential_stuffing) | security | 50 s | 🔐 Force MFA + reset sessions | 🛡️ Rate-limit traffic (40 s) | no | symptoms |
+| ⏰ [Clock drift](#clock_drift) | systems | 55 s | ⏰ Resync the clock (NTP) | — | no | symptoms |
+| 📏 [MTU black hole](#mtu_black_hole) | network | 55 s | 📏 Clamp TCP MSS to the path MTU | — | no | symptoms |
+| 🧠 [Split brain](#split_brain) | advanced | 45 s | 🚧 Fence the stale primary (STONITH) | 📖 Switch to read-only mode (35 s) | no | symptoms |
+| 🕵️ [Data exfiltration](#data_exfiltration) | security | 50 s | 🕳️ Sinkhole the C2 domain + rotate keys | 🚫 Block attackers with an ACL (35 s) | yes: 🔦 → 🕳️ Sinkhole the C2 domain + rotate keys | symptoms |
+| 🐃 [Cache stampede](#cache_stampede) | systems | 45 s | 🔥 Warm the cache, coalesce requests | 🛡️ Rate-limit traffic (35 s) | no | symptoms |
+| 🧨 [Zero-day exploit](#zero_day_exploit) | security | 40 s | 🧩 Deploy a WAF virtual patch | 🚧 Quarantine on an isolated VLAN (35 s) | no | symptoms |
+| 📦 [Poisoned dependency](#poisoned_dependency) | security | 50 s | 📌 Pin deps + rebuild from lockfile | ⏪ Roll back the deploy (35 s) | no | symptoms |
 
 ## Service crashed
 
@@ -370,6 +380,208 @@ Every section has a ▶ **live** link that starts a shift with that fault staged
 | 🔄 Restart the service<br>`systemctl restart {node}` | ✖ no effect | The port configuration survives a restart. |
 
 **Concept, VLANs:** VLANs split one switch into separate networks. A port on the wrong VLAN can't reach its own subnet's default gateway.
+
+## BGP route hijack
+
+🗺️ `bgp` · network · **45 s** to loss · hits: `router`, `firewall`, `cdn` · ▶ [live on メインルーター Router](https://go.fridge.run/luckymonkey#node=main-router&incident=bgp&zoom=1.2)
+
+**Symptom:** Half the internet now thinks our addresses live somewhere else. Traffic is walking off to a stranger's network.
+
+**How it starts:** *A neighbouring network fat-fingered a route and claimed the node's addresses.* · *A mischievous magpie network announced the node's prefix to the whole internet.*
+
+**What its neighbours suffer:** its traffic through the origin wanders off to a stranger's network.
+
+| Response | Effect | Why |
+|---|---|---|
+| 🛡️ Enforce RPKI origin validation<br>`router bgp 64512 && rpki validate --reject-invalid` | ✅ fix | Invalid route announcements are rejected: only we may announce our prefix. |
+| 📣 Announce more-specific /24s<br>`bgp announce 10.0.0.0/24 10.0.1.0/24` | 🩹 mitigate, 40 s | Longer prefixes win, so most traffic comes home. The bad route is still out there. |
+| 🧭 Correct the routing table<br>`ip route replace default via 10.0.0.1 dev eth0` | ✖ no effect | Our own routes are fine: the bad one is announced by someone else. |
+| 🔄 Restart the service | ✖ no effect | A real tool for a different problem. |
+| 📛 Restore the DNS resolver config | ✖ no effect | A real tool for a different problem. |
+
+**Concept, BGP and RPKI:** Networks announce which addresses they own with BGP. Anyone can announce anything, so RPKI signs who may announce what, and routers reject the rest.
+
+## Ransomware
+
+🔒 `ransomware` · security · **45 s** to loss · hits: `server`, `database`, `vault`, `terminal`, `queue` · ▶ [live on Crashed Sector 404](https://go.fridge.run/luckymonkey#node=crashed-sector&incident=ransomware&zoom=1.2)
+
+**Symptom:** Files are being renamed to *.locked and a note demands 400 bananas.
+
+**How it starts:** *Someone on the node opened 'free_bananas.pdf.exe'.* · *An old remote-desktop port on the node had a guessable password.*
+
+**What its neighbours suffer:** its shared files on the origin are locked.
+
+**Warning stage** 📡 (70 s): A machine is quietly beaconing to an unknown server every 60 seconds. Prevent with 🚧 Quarantine on an isolated VLAN, 🕳️ Sinkhole the C2 domain + rotate keys. ▶ [live](https://go.fridge.run/luckymonkey#node=crashed-sector&forecast=ransomware&zoom=1.2)
+
+| Response | Effect | Why |
+|---|---|---|
+| 🧊 Restore from immutable backups<br>`restic restore latest --target /srv/{node} --verify` | ✅ fix | Clean files are back from backups the attacker could not touch. |
+| 🚧 Quarantine on an isolated VLAN<br>`switchctl move {node} --vlan 666-quarantine` | 🩹 mitigate, 40 s | Isolated: the encryption can't reach more shares. The locked files are still locked. |
+| 🔄 Restart the service<br>`systemctl restart {node}` | ✖ no effect | The files stay encrypted after a reboot. |
+| 🧹 Clear old snapshots | ✖ no effect | A real tool for a different problem. |
+| 🔑 Renew the TLS certificate | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Ransomware and immutable backups:** Ransomware encrypts files and asks for payment. Backups that cannot be changed (immutable, offline) are what make it a bad day instead of a disaster.
+
+## Credential stuffing
+
+🗝️ `creds` · security · **50 s** to loss · hits: `auth`, `balancer`, `cdn` · ▶ [live on Lilypad Load Balancer](https://go.fridge.run/luckymonkey#node=lb-lilypads&incident=creds&zoom=1.2)
+
+**Symptom:** Millions of logins with passwords leaked from other sites. A few are working.
+
+**How it starts:** *A password dump from another site turned up, and the node is the obvious place to try it.* · *A bot-herder rented a million home routers to try passwords on the node.*
+
+**What its neighbours suffer:** accounts used through the origin are being taken over.
+
+| Response | Effect | Why |
+|---|---|---|
+| 🔐 Force MFA + reset sessions<br>`idp policy set mfa=required && idp sessions revoke --all` | ✅ fix | A stolen password alone no longer gets anyone in. |
+| 🛡️ Rate-limit traffic<br>`tc qdisc add dev eth0 root tbf rate 200mbit burst 32k` | 🩹 mitigate, 40 s | Fewer guesses per second, but they keep coming. |
+| 🚫 Block attackers with an ACL<br>`iptables -A INPUT -m set --match-set stampede src -j DROP` | ✖ no effect | The guesses come from everywhere: there's no short list of sources to block. |
+| 🔑 Renew the TLS certificate | ✖ no effect | A real tool for a different problem. |
+| 🔄 Restart the service | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Credential stuffing and MFA:** Leaked passwords from one site get tried on others. Multi-factor authentication means a password alone isn't enough.
+
+## Clock drift
+
+⏰ `ntp` · systems · **55 s** to loss · hits: `auth`, `server`, `queue`, `database`, `dns` · ▶ [live on Crashed Sector 404](https://go.fridge.run/luckymonkey#node=crashed-sector&incident=ntp&zoom=1.2)
+
+**Symptom:** This machine thinks it is seven minutes in the future. Logins and certificates are being rejected as 'not yet valid'.
+
+**How it starts:** *the node's time server was quietly switched off last week.* · *A virtual machine on the node was paused and resumed, and its clock never caught up.*
+
+**What its neighbours suffer:** tokens signed on the origin look like they come from the future.
+
+| Response | Effect | Why |
+|---|---|---|
+| ⏰ Resync the clock (NTP)<br>`chronyc makestep && chronyc tracking` | ✅ fix | Clock back in step: tokens and certificates make sense again. |
+| 🔑 Renew the TLS certificate<br>`certbot renew --cert-name {node} && systemctl reload {node}` | ✖ no effect | A new certificate looks 'not yet valid' to a clock that's wrong too. |
+| 🔄 Restart the service | ✖ no effect | A real tool for a different problem. |
+| 📛 Restore the DNS resolver config | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Clock sync (NTP):** Certificates, tokens and logs all depend on the time. NTP keeps clocks in step; a few minutes of drift breaks logins.
+
+## MTU black hole
+
+📏 `mtu` · network · **55 s** to loss · hits: `router`, `firewall`, `switch`, `river` · ▶ [live on Logical Lagoon API](https://go.fridge.run/luckymonkey#node=logical-lagoon&incident=mtu&zoom=1.2)
+
+**Symptom:** Small requests work; big downloads hang forever. Ping is fine, which makes it extra confusing.
+
+**How it starts:** *A new VPN tunnel on the node shrank the path, and a firewall eats the 'packet too big' messages.* · *the node got jumbo frames turned on, but the river link didn't.*
+
+**What its neighbours suffer:** big transfers through the origin freeze half-way.
+
+| Response | Effect | Why |
+|---|---|---|
+| 📏 Clamp TCP MSS to the path MTU<br>`iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu` | ✅ fix | TCP segments now fit the tunnel; nothing needs fragmenting. |
+| 🔄 Restart the service<br>`systemctl restart {node}` | ✖ no effect | The packets are still too big for the path. |
+| 🔌 Replace the cable | ✖ no effect | A real tool for a different problem. |
+| 🧭 Correct the routing table | ✖ no effect | A real tool for a different problem. |
+
+**Concept, MTU and MSS:** Every link has a largest packet size (MTU). If 'packet too big' messages are blocked, big transfers silently hang. Clamping TCP MSS avoids it.
+
+## Split brain
+
+🧠 `splitbrain` · advanced · **45 s** to loss · hits: `database`, `vault`, `queue`, `lake` · ▶ [live on データベース Database](https://go.fridge.run/luckymonkey#node=database-cluster&incident=splitbrain&zoom=1.2)
+
+**Symptom:** Two copies both think they are in charge and both accept writes. Their data is drifting apart by the second.
+
+**How it starts:** *A network hiccup cut the node's cluster in half and each half elected a leader.* · *Someone restarted the node's cluster manager with quorum checks switched off.*
+
+**What its neighbours suffer:** reads through the origin get different answers each time.
+
+| Response | Effect | Why |
+|---|---|---|
+| 🚧 Fence the stale primary (STONITH)<br>`pcs stonith fence {node}-b && pcs status` | ✅ fix | One primary again: the stale one is powered off and will rejoin as a replica. |
+| 📖 Switch to read-only mode<br>`psql -c "ALTER SYSTEM SET default_transaction_read_only = on"` | 🩹 mitigate, 35 s | No new conflicts, but nobody can write anything either. |
+| 🔀 Fail over to standby<br>`haproxyctl failover {node} --to standby` | ✖ no effect | Failing over makes a third leader. Not helpful. |
+| 🔁 Resync replicas from primary | ✖ no effect | A real tool for a different problem. |
+| 🔄 Restart the service | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Split brain and quorum:** A cluster needs a majority (quorum) to pick one leader. Without it both halves may lead; fencing (STONITH) powers off the stale one.
+
+## Data exfiltration
+
+🕵️ `exfil` · security · **50 s** to loss · hits: `database`, `vault`, `dns`, `ai-core`, `server` · ▶ [live on Crashed Sector 404](https://go.fridge.run/luckymonkey#node=crashed-sector&incident=exfil&zoom=1.2)
+
+**Symptom:** Someone is smuggling data out, one tiny DNS question at a time.
+
+**How it starts:** *A poisoned browser plugin on the node has been whispering secrets for a week.* · *A quiet intruder set up camp in the node and is packing up the silverware.*
+
+**What its neighbours suffer:** secrets that pass through the origin are being copied out.
+
+**Warning stage** 🔦 (70 s): Odd TXT lookups for random-looking subdomains, all night. Prevent with 🕳️ Sinkhole the C2 domain + rotate keys. ▶ [live](https://go.fridge.run/luckymonkey#node=crashed-sector&forecast=exfil&zoom=1.2)
+
+| Response | Effect | Why |
+|---|---|---|
+| 🕳️ Sinkhole the C2 domain + rotate keys<br>`rpz add evil-banana.example CNAME . && vault rotate --all` | ✅ fix | The smuggler's domain now leads nowhere, and every stolen key is useless. |
+| 🚫 Block attackers with an ACL<br>`iptables -A INPUT -m set --match-set stampede src -j DROP` | 🩹 mitigate, 35 s | This exit is blocked; they'll look for another. |
+| 🔄 Restart the service<br>`systemctl restart {node}` | ✖ no effect | The implant starts again with the machine. |
+| 🧹 Clear old snapshots | ✖ no effect | A real tool for a different problem. |
+| 🔑 Renew the TLS certificate | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Exfiltration and DNS tunnels:** Attackers hide stolen data in ordinary-looking traffic, even DNS lookups. Sinkholing their domain and rotating keys cuts them off.
+
+## Cache stampede
+
+🐃 `stampede` · systems · **45 s** to loss · hits: `banana-cache`, `cdn`, `database`, `balancer` · ▶ [live on Banana Sector Cache](https://go.fridge.run/luckymonkey#node=banana-sector&incident=stampede&zoom=1.2)
+
+**Symptom:** A popular cache entry expired and ten thousand requests all ran to the database at once.
+
+**How it starts:** *Every key on the node was set to expire at exactly midnight.* · *A flash sale on golden bananas emptied the node's cache.*
+
+**What its neighbours suffer:** requests through the origin wait in a very long queue.
+
+| Response | Effect | Why |
+|---|---|---|
+| 🔥 Warm the cache, coalesce requests<br>`cachectl warm {node} --top 50000 && cachectl coalesce on` | ✅ fix | Hot keys are warm again and only one request refills each miss. |
+| 🛡️ Rate-limit traffic<br>`tc qdisc add dev eth0 root tbf rate 200mbit burst 32k` | 🩹 mitigate, 35 s | The herd is held back at the gate. The cache is still cold. |
+| 🔄 Restart the service<br>`systemctl restart {node}` | ✖ no effect | A restarted cache is an empty cache: even more misses. |
+| 🏷️ Expand the DHCP pool | ✖ no effect | A real tool for a different problem. |
+| 🧹 Clear old snapshots | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Cache stampede:** When a hot cache entry expires, many requests miss at once and hammer the database. Request coalescing and staggered expiry prevent it.
+
+## Zero-day exploit
+
+🧨 `zeroday` · security · **40 s** to loss · hits: `cdn`, `auth`, `server`, `balancer`, `ai-core` · ▶ [live on Crashed Sector 404](https://go.fridge.run/luckymonkey#node=crashed-sector&incident=zeroday&zoom=1.2)
+
+**Symptom:** A brand-new bug with no patch yet. Strange requests are making the service do things it shouldn't.
+
+**How it starts:** *A clever weasel found a bug in the node that nobody knew about.* · *A proof-of-concept for the node's web framework was posted an hour ago.*
+
+**What its neighbours suffer:** requests from the origin carry the exploit along.
+
+| Response | Effect | Why |
+|---|---|---|
+| 🧩 Deploy a WAF virtual patch<br>`waf rules add --block 'CVE-2026-1337' --scope {node}` | ✅ fix | The firewall now blocks the exploit pattern until a real patch ships. |
+| 🚧 Quarantine on an isolated VLAN<br>`switchctl move {node} --vlan 666-quarantine` | 🩹 mitigate, 35 s | Cut off from the rest; it's still vulnerable. |
+| 🩹 Install the patch<br>`apt-get install --only-upgrade jungle-runtime` | ✖ no effect | There is no patch yet: that's what zero-day means. |
+| 🔄 Restart the service | ✖ no effect | A real tool for a different problem. |
+| ⏪ Roll back the deploy | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Zero-days and virtual patches:** A zero-day has no vendor patch yet. A WAF rule that blocks the exploit pattern (a virtual patch) protects you until one ships.
+
+## Poisoned dependency
+
+📦 `supplychain` · security · **50 s** to loss · hits: `server`, `auth`, `queue`, `ai-core`, `cdn` · ▶ [live on Crashed Sector 404](https://go.fridge.run/luckymonkey#node=crashed-sector&incident=supplychain&zoom=1.2)
+
+**Symptom:** Last night's build picked up a library update with a hidden backdoor.
+
+**How it starts:** *A maintainer's account for banana-utils was taken over and a new version shipped.* · *the node's build used a package with a name one letter off from the real one.*
+
+**What its neighbours suffer:** everything the origin builds carries the backdoor.
+
+| Response | Effect | Why |
+|---|---|---|
+| 📌 Pin deps + rebuild from lockfile<br>`git checkout lockfile@verified && make build verify-sbom` | ✅ fix | Rebuilt from a signed, pinned lockfile: the bad version is gone. |
+| ⏪ Roll back the deploy<br>`deployctl rollback {node} --to v2.3` | 🩹 mitigate, 35 s | Yesterday's build runs for now; the next build will pull the bad version again. |
+| 🩹 Install the patch<br>`apt-get install --only-upgrade jungle-runtime` | ✖ no effect | The 'update' is the problem. |
+| 🔄 Restart the service | ✖ no effect | A real tool for a different problem. |
+| 🔑 Renew the TLS certificate | ✖ no effect | A real tool for a different problem. |
+
+**Concept, Supply-chain attacks:** Your code is only as safe as what it depends on. Pinned, signed versions and an SBOM let you rebuild from known-good parts.
 
 ## Traps
 

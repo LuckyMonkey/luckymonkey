@@ -453,7 +453,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, windows: Query<&Window>) {
         ],
     ));
     let touch = windows.iter().next().is_some_and(|w| w.width() < 768.0);
-    let hint = if touch { "Drag to pan · pinch to zoom · tap a node, pick a fix" } else { "WASD/drag: pan · arrows: hop nodes · Q/E: islands · Space/Tab: alerts · 1-4: respond · H: 🍌 hint · I: diagnose · O: origin · Z-N: crew" };
+    let hint = if touch { "Drag to pan · pinch to zoom · tap a node, pick a fix" } else { "WASD/drag: pan · arrows: hop nodes · Q/E: islands · Space/Tab: alerts · 1-4: respond · H: 🍌 hint · I: diagnose · O: origin · Z-N: crew · P: pause · M: sound" };
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,

@@ -27,6 +27,10 @@ export default function Home() {
       setError("This browser has no WebGL2, which Lucky Monkey needs.")
       return
     }
+    // Synthesized sound effects (window.lmSfx, called from game/src/sfx.rs).
+    const sfx = document.createElement("script")
+    sfx.src = asset("/sfx.js")
+    document.head.appendChild(sfx)
     // Live data: the game reads these JSON files at startup (game/src/data.rs), so
     // they can be edited and redeployed without rebuilding the wasm.
     const load = (name: string) =>
