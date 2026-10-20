@@ -128,10 +128,11 @@ struct LinkLine {
 struct LinkCurves(Vec<Vec<Vec2>>);
 const ROPE_SEGS: usize = 14;
 const ROPE: Color = Color::srgb(0.72, 0.57, 0.36);
+/// Panels that take the mode colour: blue on the tour, green otherwise.
 #[derive(Component)]
-struct TourCard;
-#[derive(Component)]
-struct TourText;
+pub struct Themed;
+/// The tour's colour.
+pub const TOUR_BLUE: Color = Color::srgb(0.55, 0.8, 1.0);
 #[derive(Component)]
 struct PracticeButton;
 #[derive(Component)]
@@ -266,7 +267,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
         .add_systems(Update, (links, frames, cards, popups, worker_tokens, zoom_labels))
-        .add_systems(Update, (phone_column, pins, pin_clicks, terminal, guide, summary, tour_card, setup_panel, sounds).run_if(in_state(Screen::Playing)))
+        .add_systems(Update, (phone_column, pins, pin_clicks, terminal, guide, summary, theme, setup_panel, sounds).run_if(in_state(Screen::Playing)))
         .add_systems(
             Update,
             (meta_controls, navigate, controls, tick, strikes, hud, ttl_box, roster, alert_list, feed, live_ttls).chain().run_if(in_state(Screen::Playing)),
@@ -1153,7 +1154,23 @@ fn boxed() -> impl Bundle {
         },
         BorderColor::all(GREEN_500.with_alpha(0.4)),
         BackgroundColor(PANEL_BG),
+        Themed,
     )
+}
+
+/// The mode shows as colour: the tour is blue, idle and shifts are green (the
+/// Time to Loss timer keeps its own red/amber for live trouble).
+fn theme(game: Res<Game>, mut panels: Query<&mut BorderColor, With<Themed>>, hud_text: Single<Entity, With<HudText>>, hint_text: Single<Entity, With<HintText>>, mut colors: Query<&mut TextColor>) {
+    let accent = if game.tour.is_some() { TOUR_BLUE } else { GREEN_500 };
+    for mut b in &mut panels {
+        *b = BorderColor::all(accent.with_alpha(if game.tour.is_some() { 0.85 } else { 0.45 }));
+    }
+    if let Ok(mut c) = colors.get_mut(*hud_text) {
+        c.0 = if game.tour.is_some() { TOUR_BLUE } else { GREEN_400 };
+    }
+    if let Ok(mut c) = colors.get_mut(*hint_text) {
+        c.0 = if game.tour.is_some() { TOUR_BLUE } else { AMBER };
+    }
 }
 
 fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Query<&Window>) {
@@ -1330,23 +1347,10 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Qu
                 ],
             ));
         });
-    // Tour card.
-    commands
-        .spawn((Node { position_type: PositionType::Absolute, bottom: px(56), left: px(12), right: px(12), max_width: px(440), ..default() }, GlobalZIndex(46)))
-        .with_children(|c| {
-            c.spawn((
-                TourCard,
-                Blocks,
-                Interaction::default(),
-                Node { display: Display::None, padding: UiRect::axes(px(14), px(10)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(10)), ..default() },
-                BorderColor::all(Color::srgb(0.55, 0.8, 1.0)),
-                BackgroundColor(Color::srgb(0.0, 0.04, 0.08)),
-                children![(TourText, Text::new(""), art.text(false, 13.0), TextColor(TEXT))],
-            ));
-        });
     // Field guide.
     commands.spawn((
         GuidePanel,
+        Themed,
         Blocks,
         Interaction::default(),
         Node {
@@ -1523,49 +1527,6 @@ fn spawn_setup(commands: &mut Commands, art: &Art, game: &Game) {
         });
 }
 
-fn tour_card(game: Res<Game>, world: Res<World>, mut card: Single<&mut Node, With<TourCard>>, text: Single<Entity, With<TourText>>, mut texts: Query<&mut Text>) {
-    let Some(i) = game.tour else {
-        card.display = Display::None;
-        return;
-    };
-    card.display = Display::Flex;
-    let sim = &game.sim;
-    let node = game.tour_order[i];
-    let n = &world.nodes[node];
-    let isl = world.islands.iter().find(|x| x.id == n.island).map_or(String::new(), |x| format!("{} {}", x.emoji, x.name));
-    let role = sim.rules.roles.get(&n.kind).cloned().unwrap_or_default();
-    let links: Vec<&str> = sim.neighbours[node].iter().map(|&j| sim.nodes[j].name.as_str()).collect();
-    let impact = if node == sim.core {
-        "It IS the core router: if it goes down, every other service loses its path.".to_string()
-    } else {
-        match sim.impact_if_down(node) {
-            0 => "If it goes down, nothing else is cut off: other paths route around it.".to_string(),
-            k => format!("If it goes down, {k} other service(s) lose their path to the core router."),
-        }
-    };
-    // The legend opens the tour; each island's story greets you on its first node.
-    let first_here = i == 0 || world.nodes[game.tour_order[i - 1]].island != n.island;
-    let mut story = String::new();
-    if i == 0 && !world.legend.is_empty() {
-        story += &format!("📜 {}\n\n", world.legend);
-    }
-    if first_here {
-        if let Some(x) = world.islands.iter().find(|x| x.id == n.island).filter(|x| !x.lore.is_empty()) {
-            story += &format!("{} {}: {}\n\n", x.emoji, x.name, x.lore);
-        }
-    }
-    let s = format!(
-        "{story}🧭 NETWORK TOUR {}/{} · {isl}\n{} {} ({})\n{role}\nLinks to: {}\n{impact}\n\n→ / Space: next   ← back   Esc: end the tour",
-        i + 1,
-        game.tour_order.len(),
-        n.emoji,
-        n.name,
-        n.kind,
-        links.join(", ")
-    );
-    set(&mut texts, *text, s);
-}
-
 fn set(texts: &mut Query<&mut Text>, e: Entity, s: String) {
     if let Ok(mut t) = texts.get_mut(e) {
         if t.0 != s {
@@ -1583,9 +1544,9 @@ fn next_step(game: &Game, view: &ViewState) -> String {
         }
     }
     match sim.phase {
-        Phase::Idle if game.tour.is_some() => return "🧭 Touring: → next, ← back, Esc to stop. Nothing breaks during the tour.".into(),
+        Phase::Idle if game.tour.is_some() => return format!("🧭 Tour {}/{}: → next, ← back, Esc to stop. Nothing breaks during the tour.", game.tour.unwrap_or(0) + 1, game.tour_order.len()),
         Phase::Idle => return "▶ Enter: pick a shift · P: practice, no pressure · T: tour the network first".into(),
-        Phase::Done | Phase::Collapsed if game.tour.is_some() => return "🧭 Touring: → next, ← back, Esc to stop.".into(),
+        Phase::Done | Phase::Collapsed if game.tour.is_some() => return format!("🧭 Tour {}/{}: → next, ← back, Esc to stop.", game.tour.unwrap_or(0) + 1, game.tour_order.len()),
         Phase::Done | Phase::Collapsed => return "▶ Shift over: read the summary, then Enter for the next one (P: practice, T: tour).".into(),
         Phase::Running => {}
     }
@@ -2052,7 +2013,7 @@ fn no_emoji(s: &str) -> String {
     s.chars().filter(|&c| !matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF | 0x2300..=0x23FF | 0xFE0F | 0x200D)).collect()
 }
 
-fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut<Seen>, panel: Single<(Entity, &mut Node, Option<&Children>), With<GuidePanel>>) {
+fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, world: Res<World>, mut seen: ResMut<Seen>, panel: Single<(Entity, &mut Node, Option<&Children>), With<GuidePanel>>) {
     let (root, mut node, children) = panel.into_inner();
     node.display = if game.guide_open { Display::Flex } else { Display::None };
     let key = (game.sim.learned.len(), game.guide_open);
@@ -2069,6 +2030,9 @@ fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMu
     commands.entity(root).with_children(|p| {
         p.spawn((Text::new("📖 JUNGLE FIELD GUIDE  (B to close)"), art.text(true, 14.0), TextColor(GREEN_400)));
         p.spawn((Text::new("Real networking terms, learned on the job. The jungle is fantasy; the terminology is real."), art.text(false, 11.0), TextColor(GREEN_300)));
+        if !world.legend.is_empty() {
+            p.spawn((Text::new(format!("📜 {}", world.legend)), art.text(false, 11.0), TextColor(Color::srgb(0.85, 0.82, 0.68))));
+        }
         let mut entries: Vec<(&str, String)> = vec![("timeloss", "always in effect".into())];
         entries.extend(sim.learned.iter().map(|(k, ex)| (k.as_str(), ex.clone())));
         for (k, example) in entries {

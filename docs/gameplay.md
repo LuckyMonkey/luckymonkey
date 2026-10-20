@@ -211,6 +211,10 @@ real incidents and outages, drawn bigger; warnings, symptoms, node and crew name
 hide. 50-80%: node names. Above 80%: longer names plus an ops line under each
 card (address and status). The selected node always keeps its name.
 
+**Colour tells the mode:** blue panels on the tour (the node inspector shows each
+node's role, lore and island), green when idle and on shift; live trouble keeps
+the red Time to Loss timer.
+
 Nodes off screen become **pins on the screen edge** in their direction, coloured
 by health. Click a pin to fly there.
 

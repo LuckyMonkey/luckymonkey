@@ -4,7 +4,7 @@ title: Lucky Monkey source - ui.rs
 
 # Source: game/src/ui.rs
 
-**Welcome screen, zoom buttons, hint bar, the node panel.** Explained in [interface](../interface.md). 552 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ui.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**Welcome screen, zoom buttons, hint bar, the node panel.** Explained in [interface](../interface.md). 557 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ui.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -617,6 +617,7 @@ fn panel(
     commands
         .spawn((
             PanelRoot,
+            crate::ops::Themed,
             Blocks,
             Interaction::default(),
             Node {
@@ -707,6 +708,10 @@ fn panel(
                     if !node.lore.is_empty() {
                         body.spawn(section(&art, "伝説 Lore"));
                         body.spawn(label(&art, node.lore.clone(), 11.0, Color::srgb(0.85, 0.82, 0.68)));
+                    }
+                    if let Some(isl) = world.islands.iter().find(|x| x.id == node.island).filter(|x| !x.lore.is_empty()) {
+                        body.spawn(section(&art, "島 Island"));
+                        body.spawn(label(&art, format!("{} {}: {}", isl.emoji, isl.name, isl.lore), 11.0, Color::srgb(0.85, 0.82, 0.68)));
                     }
                     if !calm {
                         body.spawn(section(&art, "説明 About"));

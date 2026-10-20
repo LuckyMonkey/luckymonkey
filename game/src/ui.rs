@@ -404,6 +404,7 @@ fn panel(
     commands
         .spawn((
             PanelRoot,
+            crate::ops::Themed,
             Blocks,
             Interaction::default(),
             Node {
@@ -494,6 +495,10 @@ fn panel(
                     if !node.lore.is_empty() {
                         body.spawn(section(&art, "伝説 Lore"));
                         body.spawn(label(&art, node.lore.clone(), 11.0, Color::srgb(0.85, 0.82, 0.68)));
+                    }
+                    if let Some(isl) = world.islands.iter().find(|x| x.id == node.island).filter(|x| !x.lore.is_empty()) {
+                        body.spawn(section(&art, "島 Island"));
+                        body.spawn(label(&art, format!("{} {}: {}", isl.emoji, isl.name, isl.lore), 11.0, Color::srgb(0.85, 0.82, 0.68)));
                     }
                     if !calm {
                         body.spawn(section(&art, "説明 About"));
