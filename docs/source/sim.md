@@ -4,7 +4,7 @@ title: Lucky Monkey source - sim.rs
 
 # Source: game/src/sim.rs
 
-**The rules, with no Bevy: faults, responses, the incident director, crew, routing, health and SLA, scoring, the event log. Tested natively by game/simtest.** Explained in [simulation](../simulation.md). 2058 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/sim.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The rules, with no Bevy: faults, responses, the incident director, crew, routing, health and SLA, scoring, the event log. Tested natively by game/simtest.** Explained in [simulation](../simulation.md). 2082 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/sim.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -136,7 +136,6 @@ pub struct FaultDef {
     pub emoji: String,
     pub name: String,
     /// Taxonomy group: network, security, systems, operations, advanced.
-    #[allow(dead_code)]
     pub group: String,
     pub symptom: String,
     /// Seconds from incident to the node going down.
@@ -1271,7 +1270,7 @@ impl Sim {
         let ttl = if warning { def.warning.as_ref().unwrap().ttl } else { def.ttl } * ttl_mult;
         let id = self.next_id;
         self.next_id += 1;
-        let options = self.options_for(&def, warning);
+        let options = self.options_for(&def, warning, node);
         let name = self.nodes[node].name.clone();
         let story = if def.origin.is_empty() {
             String::new()
@@ -1403,7 +1402,10 @@ impl Sim {
     }
 
     /// Four options: the fix(es), a mitigation if any, plus plausible decoys.
-    fn options_for(&mut self, def: &FaultDef, warning: bool) -> Vec<String> {
+    /// Fillers are what an engineer might really reach for on this machine:
+    /// first responses to other trouble this kind of node gets, then to trouble
+    /// of the same family, and only then anything at all.
+    fn options_for(&mut self, def: &FaultDef, warning: bool, node: usize) -> Vec<String> {
         let mut opts: Vec<String> = Vec::new();
         if warning {
             if let Some(w) = &def.warning {
@@ -1425,11 +1427,33 @@ impl Sim {
                 opts.push(d.clone());
             }
         }
-        let mut pool: Vec<String> = self.rules.actions.keys().filter(|k| !opts.contains(k)).cloned().collect();
-        pool.sort();
-        while opts.len() < 4 && !pool.is_empty() {
-            let k = self.below(pool.len());
-            opts.push(pool.remove(k));
+        let kind = self.nodes[node].kind.clone();
+        let mut here: Vec<String> = Vec::new();
+        let mut family: Vec<String> = Vec::new();
+        for f in self.rules.faults.values() {
+            let fits = f.kinds.is_empty() || f.kinds.contains(&kind);
+            let same = f.group == def.group;
+            for (a, r) in &f.responses {
+                if r.effect == "none" || opts.contains(a) || !self.rules.actions.contains_key(a) {
+                    continue;
+                }
+                if fits && !here.contains(a) {
+                    here.push(a.clone());
+                } else if same && !family.contains(a) {
+                    family.push(a.clone());
+                }
+            }
+        }
+        let mut rest: Vec<String> = self.rules.actions.keys().filter(|k| !opts.contains(k) && !here.contains(k) && !family.contains(k)).cloned().collect();
+        for pool in [&mut here, &mut family, &mut rest] {
+            pool.sort();
+            while opts.len() < 4 && !pool.is_empty() {
+                let k = self.below(pool.len());
+                let a = pool.remove(k);
+                if !opts.contains(&a) {
+                    opts.push(a);
+                }
+            }
         }
         for i in (1..opts.len()).rev() {
             let j = self.below(i + 1);
@@ -2116,7 +2140,7 @@ impl Sim {
                             f.ttl = d.ttl * self.ttl_mult();
                             f.ttl_full = f.ttl;
                             f.cascades = 0;
-                            f.options = self.options_for(&d, false);
+                            f.options = self.options_for(&d, false, i);
                             f.tried = 0;
                             f.diagnosed = false;
                             f.hinted = false;

@@ -1026,7 +1026,8 @@
     "$ grep 'login failed' auth.log | wc -l   → 3,881,027 in 10 min",
     "success rate 0.4%: ~15,000 accounts compromised",
     "user agents: 1 browser string, 900k IPs"
-   ]
+   ],
+   "min_level": 2
   },
   "ntp": {
    "emoji": "⏰",
@@ -1065,7 +1066,8 @@
     "$ chronyc tracking   → System time: 412.7 s slow of NTP time",
     "$ date -u vs ntp: Δ 6m53s",
     "JWT error: token used before issued (iat in the future)"
-   ]
+   ],
+   "min_level": 2
   },
   "mtu": {
    "emoji": "📏",
@@ -1250,7 +1252,8 @@
     "$ cachectl stats   → hit ratio 4% (normal 97%)",
     "$ pg_stat_activity: 9,850 identical queries waiting",
     "all keys share one TTL: they expired together"
-   ]
+   ],
+   "min_level": 2
   },
   "zeroday": {
    "emoji": "🧨",

@@ -292,3 +292,21 @@ fn o_difficulty_length_and_campaigns() {
     assert_eq!(bytes_tb(1.8), "1.8 TB");
     assert_eq!(si(2.4e12, "bps"), "2.4 Tbps");
 }
+
+#[test]
+fn p_offered_responses_fit_the_machine() {
+    // A crash on a client terminal never offers internet-edge routing fixes.
+    for seed in 1..=40 {
+        let mut sim = new_sim(seed);
+        sim.rules.director.levels[2].first = 1e9;
+        sim.start(2);
+        let t = sim.nodes.iter().position(|n| n.kind == "terminal").expect("a terminal");
+        assert!(sim.raise(t, "crash", false, None));
+        let opts = &sim.faults[t].as_ref().unwrap().options;
+        assert_eq!(opts.len(), 4);
+        assert!(opts.contains(&"restart".to_string()));
+        for bad in ["rpki", "morespecific", "fence", "mss"] {
+            assert!(!opts.contains(&bad.to_string()), "seed {seed}: {bad} offered for a crashed terminal: {opts:?}");
+        }
+    }
+}
