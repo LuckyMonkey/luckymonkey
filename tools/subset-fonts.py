@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""(Mostly obsolete: the emoji and DejaVu fonts are now shipped whole so any text in the JSON renders.) Re-subset the embedded fonts to exactly the characters the game uses.
+"""Re-subset the embedded fonts to exactly the characters the game uses.
 
 Run from the repo root after adding any non-ASCII text or emoji to game/src/*.rs
 or the world data. Needs fontTools:  python3 -m venv /tmp/ft && /tmp/ft/bin/pip install fonttools
@@ -9,8 +9,9 @@ Sources (full fonts, not in the repo):
   DejaVu Sans Mono (+Bold)  /usr/share/fonts/truetype/dejavu/  (Ubuntu package fonts-dejavu-core)
   Twemoji Mozilla           TWEMOJI env var, default ~/Projects/hedgepets/assets/fonts/emoji/Twemoji.Mozilla.ttf
                             (release: https://github.com/mozilla/twemoji-colr/releases)
-The Japanese subset (NotoSansMonoCJKjp-subset.otf) is left alone; it already covers
-the node names. Prints any character that no embedded font covers.
+  Noto Sans Mono CJK JP     /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc, font 5 (fonts-noto-cjk)
+The Japanese subset gets all kana plus every kanji the game uses (section headings,
+node names). Prints any character that no embedded font covers.
 """
 import glob, os, subprocess, sys
 from fontTools.ttLib import TTFont
@@ -30,6 +31,12 @@ for name in ["DejaVuSansMono", "DejaVuSansMono-Bold"]:
 # U+FE0F (emoji presentation) and U+200D (zero-width joiner) keep emoji sequences intact.
 subprocess.run(SUBSET + [TWEMOJI, f"--unicodes=U+FE0F,U+200D,{uni}",
                          f"--output-file={OUT}/Twemoji.Mozilla.ttf", "--layout-features=*"], check=True)
+
+# Japanese: decorative headings and names. All kana, CJK punctuation, and the kanji in use.
+kanji = ",".join("U+%04X" % ord(c) for c in chars if 0x4E00 <= ord(c) <= 0x9FFF)
+subprocess.run(SUBSET + ["/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "--font-number=5",
+                         "--unicodes=U+3000-303F,U+3040-30FF,U+FF01-FF60" + ("," + kanji if kanji else ""),
+                         f"--output-file={OUT}/NotoSansMonoCJKjp-subset.otf", "--layout-features=*"], check=True)
 
 cmaps = [TTFont(f"{OUT}/{f}").getBestCmap() for f in ["DejaVuSansMono.ttf", "NotoSansMonoCJKjp-subset.otf", "Twemoji.Mozilla.ttf"]]
 missing = [c for c in chars if c not in "️‍" and not any(ord(c) in m for m in cmaps)]

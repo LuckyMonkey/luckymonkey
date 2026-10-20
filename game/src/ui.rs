@@ -369,8 +369,20 @@ fn asset_icon(name: &str) -> &'static str {
     }
 }
 
+/// A section heading: "役割 Role". The Japanese is decoration, so it sits
+/// a little dimmer than the English beside it.
 fn section(art: &Art, title: &str) -> impl Bundle {
-    (label(art, title, 10.0, GREEN_400.with_alpha(0.7)), Node { margin: UiRect::new(px(0), px(0), px(10), px(4)), ..default() })
+    let (jp, en) = match title.split_once(' ') {
+        Some((j, e)) if j.chars().any(|c| c as u32 >= 0x3000) => (format!("{j}  "), e.to_string()),
+        _ => (String::new(), title.to_string()),
+    };
+    (
+        Text::new(jp),
+        art.text(false, 10.0),
+        TextColor(GREEN_400.with_alpha(0.4)),
+        Node { margin: UiRect::new(px(0), px(0), px(10), px(4)), ..default() },
+        children![(TextSpan::new(en), art.text(false, 10.0), TextColor(GREEN_400.with_alpha(0.75)))],
+    )
 }
 
 /// Rebuild the node panel whenever the selection or tab changes.

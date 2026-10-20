@@ -4,7 +4,7 @@ title: Lucky Monkey source - ui.rs
 
 # Source: game/src/ui.rs
 
-**Welcome screen, zoom buttons, hint bar, the node panel.** Explained in [interface](../interface.md). 557 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ui.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**Welcome screen, zoom buttons, hint bar, the node panel.** Explained in [interface](../interface.md). 569 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ui.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -48,7 +48,7 @@ Screens and overlays: the welcome gate, zoom HUD, hint bar and node panel.
 | [fn zoom_label](#fn_zoom_label) |  |
 | [fn status_color](#fn_status_color) |  |
 | [fn asset_icon](#fn_asset_icon) |  |
-| [fn section](#fn_section) |  |
+| [fn section](#fn_section) | A section heading: "役割 Role". The Japanese is decoration, so it sits |
 | [fn panel](#fn_panel) | Rebuild the node panel whenever the selection or tab changes. |
 
 ## Imports
@@ -576,9 +576,21 @@ fn asset_icon(name: &str) -> &'static str {
 
 ### fn section
 
+A section heading: "役割 Role". The Japanese is decoration, so it sits a little dimmer than the English beside it.
+
 ```rust
 fn section(art: &Art, title: &str) -> impl Bundle {
-    (label(art, title, 10.0, GREEN_400.with_alpha(0.7)), Node { margin: UiRect::new(px(0), px(0), px(10), px(4)), ..default() })
+    let (jp, en) = match title.split_once(' ') {
+        Some((j, e)) if j.chars().any(|c| c as u32 >= 0x3000) => (format!("{j}  "), e.to_string()),
+        _ => (String::new(), title.to_string()),
+    };
+    (
+        Text::new(jp),
+        art.text(false, 10.0),
+        TextColor(GREEN_400.with_alpha(0.4)),
+        Node { margin: UiRect::new(px(0), px(0), px(10), px(4)), ..default() },
+        children![(TextSpan::new(en), art.text(false, 10.0), TextColor(GREEN_400.with_alpha(0.75)))],
+    )
 }
 ```
 
