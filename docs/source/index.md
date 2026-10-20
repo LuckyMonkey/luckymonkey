@@ -4,7 +4,7 @@ title: Lucky Monkey source code
 
 # Source code
 
-The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: 8db32f8 2026-10-20). Back to the [documentation](../index.md).
+The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: e088f6c 2026-10-20). Back to the [documentation](../index.md).
 
 **Where to start reading:** [main.rs](main.md) (how the app is put together), then [ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and the rules in [sim.rs](sim.md#impl_sim).
 

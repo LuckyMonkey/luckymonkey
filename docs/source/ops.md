@@ -1841,7 +1841,7 @@ The mode shows as colour: the tour is blue, idle and shifts are green (the Time 
 fn theme(game: Res<Game>, mut panels: Query<&mut BorderColor, With<Themed>>, hud_text: Single<Entity, With<HudText>>, hint_text: Single<Entity, With<HintText>>, mut colors: Query<&mut TextColor>) {
     let accent = if game.tour.is_some() { TOUR_BLUE } else { GREEN_500 };
     for mut b in &mut panels {
-        *b = BorderColor::all(accent.with_alpha(0.45));
+        *b = BorderColor::all(accent.with_alpha(if game.tour.is_some() { 0.85 } else { 0.45 }));
     }
     if let Ok(mut c) = colors.get_mut(*hud_text) {
         c.0 = if game.tour.is_some() { TOUR_BLUE } else { GREEN_400 };
