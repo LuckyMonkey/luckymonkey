@@ -193,6 +193,14 @@ pub fn cell_hash(x: i32, y: i32) -> f32 {
 
 #[derive(Component)]
 pub struct NodeCard(pub usize);
+/// Map labels that come and go with the zoom (ops.rs `zoom_labels`).
+#[derive(Component)]
+pub struct IslandLabel;
+#[derive(Component)]
+pub struct NodeName(pub usize);
+/// The ops line under a card (address, status), shown zoomed in.
+#[derive(Component)]
+pub struct NodeInfo(pub usize);
 
 const EDGE_ISLANDS: [(i32, i32, i32); 10] = [
     (-5, 5, 4), (-8, 10, 3), (45, 5, 4), (48, 12, 3), (-6, 35, 4),
@@ -308,6 +316,7 @@ fn spawn_island_labels(mut commands: Commands, world: Res<World>, art: Res<Art>)
             .fold(f32::MIN, f32::max);
         let at = Vec2::new(iso(isl.center.x, isl.center.y, 0.0).x, top + 46.0);
         commands.spawn((
+            IslandLabel,
             Text2d::new(format!("{} {}", isl.emoji, isl.name.to_uppercase())),
             art.text(true, 36.0),
             TextColor(Color::srgba(0.85, 1.0, 0.9, 0.95)),
@@ -661,10 +670,23 @@ fn spawn_nodes(mut commands: Commands, world: Res<World>, art: Res<Art>) {
                 ));
                 c.spawn((emoji_text(&art, &node.emoji, 32.0), Transform::from_xyz(0.0, 5.0, 0.002).with_scale(Vec3::splat(0.5))));
                 c.spawn((
+                    NodeName(i),
                     Text2d::new(label),
                     art.text(true, 20.0),
                     TextColor(Color::WHITE),
                     Transform::from_xyz(0.0, -28.0, 0.002).with_scale(Vec3::splat(0.5)),
+                ));
+                c.spawn((
+                    NodeInfo(i),
+                    Text2d::new(node.ip.clone()),
+                    art.text(false, 16.0),
+                    TextColor(Color::srgb(0.75, 0.95, 0.8)),
+                    Transform::from_xyz(0.0, -52.0, 0.003).with_scale(Vec3::splat(0.5)),
+                    Visibility::Hidden,
+                ))
+                .with_child((
+                    Sprite { image: art.pill.clone(), color: Color::srgba(0.0, 0.0, 0.0, 0.75), custom_size: Some(Vec2::new(node.ip.len() as f32 * 10.0 + 120.0, 26.0)), ..default() },
+                    Transform::from_xyz(0.0, 0.0, -0.001),
                 ));
             });
     }

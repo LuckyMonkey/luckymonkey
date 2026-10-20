@@ -206,6 +206,11 @@ acted, and a combo for consecutive right calls. The end screen shows:
 | M | sound on/off |
 | T · P · B | tour · practice · field guide |
 
+**Labels follow the zoom.** Below 50%: island names (kept readable) and only
+real incidents and outages, drawn bigger; warnings, symptoms, node and crew names
+hide. 50-80%: node names. Above 80%: longer names plus an ops line under each
+card (address and status). The selected node always keeps its name.
+
 Nodes off screen become **pins on the screen edge** in their direction, coloured
 by health. Click a pin to fly there.
 

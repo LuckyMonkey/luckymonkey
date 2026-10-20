@@ -4,7 +4,7 @@ title: Lucky Monkey source - world.rs
 
 # Source: game/src/world.rs
 
-**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 671 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The map: loading world.json, the pyramid and bank fixes, the terrain meshes, edge islands, the void, decorations, node cards.** Explained in [world](../world.md). 693 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/world.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -41,6 +41,9 @@ taller terrain in front of it.
 | [fn row_z](#fn_row_z) | Draw depth for something standing on grid cell (x, y). |
 | [fn cell_hash](#fn_cell_hash) | Stable pseudo-random number in [0,1) for a grid cell (same as the old TS cellHash). |
 | [struct NodeCard](#struct_nodecard) |  |
+| [struct IslandLabel](#struct_islandlabel) | Map labels that come and go with the zoom (ops.rs `zoom_labels`). |
+| [struct NodeName](#struct_nodename) |  |
+| [struct NodeInfo](#struct_nodeinfo) | The ops line under a card (address, status), shown zoomed in. |
 | [const EDGE_ISLANDS](#const_edge_islands) |  |
 | [fn plugin](#fn_plugin) |  |
 | [struct Decos](#struct_decos) |  |
@@ -365,6 +368,31 @@ pub fn cell_hash(x: i32, y: i32) -> f32 {
 pub struct NodeCard(pub usize);
 ```
 
+### struct IslandLabel
+
+Map labels that come and go with the zoom (ops.rs `zoom_labels`).
+
+```rust
+#[derive(Component)]
+pub struct IslandLabel;
+```
+
+### struct NodeName
+
+```rust
+#[derive(Component)]
+pub struct NodeName(pub usize);
+```
+
+### struct NodeInfo
+
+The ops line under a card (address, status), shown zoomed in.
+
+```rust
+#[derive(Component)]
+pub struct NodeInfo(pub usize);
+```
+
 ### const EDGE_ISLANDS
 
 ```rust
@@ -499,6 +527,7 @@ fn spawn_island_labels(mut commands: Commands, world: Res<World>, art: Res<Art>)
             .fold(f32::MIN, f32::max);
         let at = Vec2::new(iso(isl.center.x, isl.center.y, 0.0).x, top + 46.0);
         commands.spawn((
+            IslandLabel,
             Text2d::new(format!("{} {}", isl.emoji, isl.name.to_uppercase())),
             art.text(true, 36.0),
             TextColor(Color::srgba(0.85, 1.0, 0.9, 0.95)),
@@ -935,10 +964,23 @@ fn spawn_nodes(mut commands: Commands, world: Res<World>, art: Res<Art>) {
                 ));
                 c.spawn((emoji_text(&art, &node.emoji, 32.0), Transform::from_xyz(0.0, 5.0, 0.002).with_scale(Vec3::splat(0.5))));
                 c.spawn((
+                    NodeName(i),
                     Text2d::new(label),
                     art.text(true, 20.0),
                     TextColor(Color::WHITE),
                     Transform::from_xyz(0.0, -28.0, 0.002).with_scale(Vec3::splat(0.5)),
+                ));
+                c.spawn((
+                    NodeInfo(i),
+                    Text2d::new(node.ip.clone()),
+                    art.text(false, 16.0),
+                    TextColor(Color::srgb(0.75, 0.95, 0.8)),
+                    Transform::from_xyz(0.0, -52.0, 0.003).with_scale(Vec3::splat(0.5)),
+                    Visibility::Hidden,
+                ))
+                .with_child((
+                    Sprite { image: art.pill.clone(), color: Color::srgba(0.0, 0.0, 0.0, 0.75), custom_size: Some(Vec2::new(node.ip.len() as f32 * 10.0 + 120.0, 26.0)), ..default() },
+                    Transform::from_xyz(0.0, 0.0, -0.001),
                 ));
             });
     }

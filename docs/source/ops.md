@@ -4,7 +4,7 @@ title: Lucky Monkey source - ops.rs
 
 # Source: game/src/ops.rs
 
-**The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders.** Explained in [gameplay](../gameplay.md). 2431 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ops.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
+**The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders.** Explained in [gameplay](../gameplay.md). 2494 lines. [On GitHub](https://github.com/LuckyMonkey/luckymonkey/blob/main/game/src/ops.rs) (needs repo access). This page is generated from the code on every deploy by `tools/wiki-source.py`; back to the [source index](index.md).
 
 ## What this file says about itself
 
@@ -47,6 +47,7 @@ workers, edge pins).
 | [struct BadgeTtl](#struct_badgettl) |  |
 | [struct WorkerToken](#struct_workertoken) |  |
 | [struct WorkBar](#struct_workbar) |  |
+| [struct WorkerName](#struct_workername) |  |
 | [struct Popup](#struct_popup) |  |
 | [struct HudText](#struct_hudtext) |  |
 | [struct HintText](#struct_hinttext) |  |
@@ -110,6 +111,9 @@ workers, edge pins).
 | [fn badge_text](#fn_badge_text) |  |
 | [fn cards](#fn_cards) |  |
 | [const WORKER_SCALE](#const_worker_scale) | Crew tokens are drawn a little larger than the critters. |
+| [const LABELS_FAR](#const_labels_far) | Zoom tiers for map labels: below FAR only islands and major incidents; |
+| [const LABELS_NEAR](#const_labels_near) |  |
+| [fn zoom_labels](#fn_zoom_labels) |  |
 | [fn worker_tokens](#fn_worker_tokens) |  |
 | [fn popup](#fn_popup) |  |
 | [fn popups](#fn_popups) |  |
@@ -167,7 +171,7 @@ use crate::sfx;
 use crate::sim::{self, bytes_tb, Cat, Health, Phase, Sim, SimNode, Stage};
 use crate::ui::{Blocks, GREEN_300, GREEN_400, GREEN_500, GREEN_900, RED_400, RED_500};
 use crate::view::ViewState;
-use crate::world::{emoji_text, iso, node_color, NodeCard, World, NODE_Z};
+use crate::world::{emoji_text, iso, node_color, IslandLabel, NodeCard, NodeInfo, NodeName, World, NODE_Z};
 use crate::{Art, Rng, Screen};
 ```
 
@@ -429,6 +433,13 @@ struct WorkerToken(usize);
 ```rust
 #[derive(Component)]
 struct WorkBar(usize);
+```
+
+### struct WorkerName
+
+```rust
+#[derive(Component)]
+struct WorkerName;
 ```
 
 ### struct Popup
@@ -770,7 +781,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, setup)
         .add_systems(PostStartup, spawn_overlay)
         .add_systems(OnEnter(Screen::Playing), (spawn_hud, spawn_pins, apply_link).chain())
-        .add_systems(Update, (links, frames, cards, popups, worker_tokens))
+        .add_systems(Update, (links, frames, cards, popups, worker_tokens, zoom_labels))
         .add_systems(Update, (phone_column, pins, pin_clicks, terminal, guide, summary, tour_card, setup_panel, sounds).run_if(in_state(Screen::Playing)))
         .add_systems(
             Update,
@@ -972,7 +983,7 @@ fn spawn_overlay(mut commands: Commands, game: Res<Game>, art: Res<Art>, world: 
         commands
             .spawn((WorkerToken(w), emoji_text(&art, &wk.emoji, 34.0), Transform::from_translation(Vec2::from(wk.pos).extend(NODE_Z + 30.0)).with_scale(Vec3::splat(WORKER_SCALE))))
             .with_children(|c| {
-                c.spawn((Text2d::new(wk.name.to_uppercase()), art.text(true, 16.0), TextColor(TEXT), Transform::from_xyz(0.0, -36.0, 0.01)))
+                c.spawn((WorkerName, Text2d::new(wk.name.to_uppercase()), art.text(true, 16.0), TextColor(TEXT), Transform::from_xyz(0.0, -36.0, 0.01)))
                     .with_child(plate(&art, Vec2::new(wk.name.len() as f32 * 11.0 + 20.0, 24.0), 0.75));
                 c.spawn((WorkBar(w), Sprite::from_color(Color::srgb(1.0, 0.85, 0.2), Vec2::new(60.0, 6.0)), Transform::from_xyz(0.0, -50.0, 0.01), Visibility::Hidden));
             });
@@ -1120,6 +1131,7 @@ fn badge_text(sim: &Sim, i: usize) -> Option<(String, String, Color)> {
 ```rust
 fn cards(
     game: Res<Game>,
+    view: Res<ViewState>,
     time: Res<Time>,
     world: Res<World>,
     mut cards: Query<(&NodeCard, &mut Sprite)>,
@@ -1138,13 +1150,17 @@ fn cards(
             Health::Down => Color::srgba(0.22, 0.08, 0.08, 0.95),
         };
     }
+    // Zoomed far out only the trouble that matters shows, drawn bigger to stay readable.
+    let far = view.zoom < LABELS_FAR;
     for (badge, mut text, mut tf, mut vis) in &mut badges {
-        match badge_text(sim, badge.0) {
+        let major = sim.faults[badge.0].as_ref().is_some_and(|f| !f.is_warning() && !f.is_symptom());
+        match badge_text(sim, badge.0).filter(|_| !far || major) {
             Some((glyph, _, _)) => {
                 if text.0 != glyph {
                     text.0 = glyph;
                 }
                 tf.translation.y = 62.0 + (t * 3.0 + badge.0 as f32).sin() * 2.0;
+                tf.scale = Vec3::splat(0.5 * (LABELS_FAR / view.zoom).max(1.0));
                 *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
@@ -1167,6 +1183,75 @@ Crew tokens are drawn a little larger than the critters.
 
 ```rust
 const WORKER_SCALE: f32 = 0.62;
+```
+
+### const LABELS_FAR
+
+Zoom tiers for map labels: below FAR only islands and major incidents; from FAR node names; from NEAR full names and an ops line per node.
+
+```rust
+const LABELS_FAR: f32 = 0.5;
+```
+
+### const LABELS_NEAR
+
+```rust
+const LABELS_NEAR: f32 = 0.8;
+```
+
+### fn zoom_labels
+
+```rust
+#[allow(clippy::type_complexity)]
+fn zoom_labels(
+    view: Res<ViewState>,
+    game: Res<Game>,
+    world: Res<World>,
+    mut islands: Query<&mut Transform, (With<IslandLabel>, Without<NodeName>, Without<NodeInfo>)>,
+    mut names: Query<(&NodeName, &mut Text2d, &mut Visibility), (Without<NodeInfo>, Without<WorkerName>)>,
+    mut infos: Query<(&NodeInfo, &mut Text2d, &mut TextColor, &mut Visibility), (Without<NodeName>, Without<WorkerName>)>,
+    mut crew: Query<&mut Visibility, (With<WorkerName>, Without<NodeName>, Without<NodeInfo>)>,
+) {
+    let z = view.zoom;
+    let (far, near) = (z < LABELS_FAR, z >= LABELS_NEAR);
+    // Island names grow as the map shrinks, so they stay the same size on screen.
+    let s = 0.5 * (0.7 / z).max(1.0);
+    for mut tf in &mut islands {
+        tf.scale = Vec3::splat(s);
+    }
+    let shown = |v: bool| if v { Visibility::Inherited } else { Visibility::Hidden };
+    for (n, mut text, mut vis) in &mut names {
+        // The selected node keeps its name at any zoom.
+        let sel = view.selected == Some(n.0);
+        *vis = shown(!far || sel);
+        let name = &world.nodes[n.0].name;
+        let max = if near || sel { 18 } else { 12 };
+        let label = if name.chars().count() > max { format!("{}..", name.chars().take(max - 2).collect::<String>()) } else { name.clone() };
+        if text.0 != label {
+            text.0 = label;
+        }
+    }
+    for (n, mut text, mut color, mut vis) in &mut infos {
+        *vis = shown(near);
+        if !near {
+            continue;
+        }
+        let h = game.sim.health[n.0];
+        let s = format!("{} · {}", world.nodes[n.0].ip, h.label());
+        if text.0 != s {
+            text.0 = s;
+        }
+        color.0 = match h {
+            Health::Online => Color::srgb(0.75, 0.95, 0.8),
+            Health::Degraded => AMBER,
+            Health::Down => RED_400,
+            Health::Unreachable => SLATE,
+        };
+    }
+    for mut vis in &mut crew {
+        *vis = shown(!far);
+    }
+}
 ```
 
 ### fn worker_tokens
