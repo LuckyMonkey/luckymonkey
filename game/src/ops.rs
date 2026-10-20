@@ -639,9 +639,9 @@ fn popup(commands: &mut Commands, art: &Art, at: Vec2, text: String, color: Colo
     .with_child(plate(art, Vec2::new(w, 34.0), 0.85));
 }
 
-fn popups(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &Popup, &mut Transform, &mut TextColor)>) {
+fn popups(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &Popup, &mut Transform, &mut TextColor, &mut Text2d)>) {
     let now = time.elapsed_secs();
-    for (e, p, mut tf, mut color) in &mut q {
+    for (e, p, mut tf, mut color, mut text) in &mut q {
         let age = now - p.born;
         if age > 3.5 {
             commands.entity(e).despawn();
@@ -649,6 +649,9 @@ fn popups(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &Popup,
         }
         tf.translation.y += 20.0 * time.delta_secs();
         color.0 = color.0.with_alpha((3.5 - age).min(1.0));
+        if age > 2.5 && text.0.chars().any(|c| no_emoji(&c.to_string()).is_empty()) {
+            text.0 = no_emoji(&text.0);
+        }
     }
 }
 
@@ -1902,22 +1905,22 @@ const TERM_HOLD: f32 = 2.5;
 const TERM_FADE: f32 = 0.8;
 
 /// The terminal card: the command types itself out, its output streams in,
-/// then the verdict. A couple of seconds later it fades away; moving the mouse
-/// back over it brings it back (then it fades again). Esc fades it now.
+/// then the verdict. A couple of seconds later it fades away; the mouse over it
+/// while it fades keeps it up for reading. Once faded it is gone until the next
+/// command. Esc dismisses it now.
 #[allow(clippy::too_many_arguments)]
 fn terminal(
-    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut game: ResMut<Game>,
-    mut card: Single<(Entity, &mut Node, &mut BorderColor, &mut BackgroundColor, &Interaction, Has<Blocks>), With<OutcomeCard>>,
+    mut card: Single<(&mut Node, &mut BorderColor, &mut BackgroundColor, &Interaction), With<OutcomeCard>>,
     body: Single<Entity, With<OutcomeText>>,
     verdict: Single<Entity, With<TermVerdict>>,
     mut texts: Query<&mut Text>,
     mut colors: Query<&mut TextColor>,
 ) {
     let now = time.elapsed_secs();
-    let (card_e, node, border, bg, interaction, blocks) = &mut *card;
+    let (node, border, bg, interaction) = &mut *card;
     let busy = game.term.as_ref().is_some_and(|t| t.verdict.is_none()) && !game.paused;
     if busy || matches!(**interaction, Interaction::Hovered | Interaction::Pressed) {
         game.term_seen = now;
@@ -1930,14 +1933,13 @@ fn terminal(
         node.display = Display::None;
         return;
     };
-    node.display = Display::Flex;
     let alpha = 1.0 - ((now - game.term_seen - TERM_HOLD) / TERM_FADE).clamp(0.0, 1.0);
-    // Faded out it stays hoverable but no longer swallows clicks meant for the map.
-    if alpha <= 0.0 && *blocks {
-        commands.entity(*card_e).remove::<Blocks>();
-    } else if alpha > 0.0 && !*blocks {
-        commands.entity(*card_e).insert(Blocks);
+    if alpha <= 0.0 {
+        node.display = Display::None;
+        game.term_hidden = true;
+        return;
     }
+    node.display = Display::Flex;
     bg.0 = Color::srgba(0.0, 0.02, 0.0, 0.97 * alpha);
     let clock = game.sim.clock;
     let el = clock - t.start;
@@ -1961,9 +1963,11 @@ fn terminal(
             s += "\n▌";
         }
     }
-    set(&mut texts, *body, s);
     let (v, c) = t.verdict.clone().unwrap_or((String::new(), GREEN_400));
     let has_verdict = t.verdict.is_some();
+    // Colour emoji ignore text alpha, so they leave the fade early instead of lingering.
+    let (s, v) = if alpha < 1.0 { (no_emoji(&s), no_emoji(&v)) } else { (s, v) };
+    set(&mut texts, *body, s);
     set(&mut texts, *verdict, v);
     if let Ok(mut col) = colors.get_mut(*verdict) {
         col.0 = c.with_alpha(alpha);
@@ -1979,6 +1983,10 @@ fn terminal(
         }
         game.typed = shown;
     }
+}
+
+fn no_emoji(s: &str) -> String {
+    s.chars().filter(|&c| !matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF | 0x2300..=0x23FF | 0xFE0F | 0x200D)).collect()
 }
 
 fn guide(mut commands: Commands, art: Res<Art>, game: Res<Game>, mut seen: ResMut<Seen>, panel: Single<(Entity, &mut Node, Option<&Children>), With<GuidePanel>>) {

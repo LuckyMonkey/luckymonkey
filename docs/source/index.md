@@ -4,7 +4,7 @@ title: Lucky Monkey source code
 
 # Source code
 
-The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: bce8bd4 2026-10-19). Back to the [documentation](../index.md).
+The whole game, readable in the wiki. Each Rust file has a heading for every function, struct and impl, so the articles link straight to the lines they talk about. Generated from the code by `tools/wiki-source.py` (last: f7c4f5e 2026-10-19). Back to the [documentation](../index.md).
 
 **Where to start reading:** [main.rs](main.md) (how the app is put together), then [ops.rs](ops.md) (the game), starting at [the plugin](ops.md#fn_plugin) and the rules in [sim.rs](sim.md#impl_sim).
 
@@ -22,7 +22,7 @@ The whole game, readable in the wiki. Each Rust file has a heading for every fun
 | [game/src/ui.rs](ui.md) | Welcome screen, zoom buttons, hint bar, the node panel. | 19 functions, 38 items |
 | [game/src/sim.rs](sim.md) | The rules, with no Bevy: faults, responses, the incident director, crew, routing, health and SLA, scoring, the event log. Tested natively by game/simtest. | 11 functions, 48 items |
 | [game/src/data.rs](data.md) | Live JSON: fetches tuning/world/npcs from the page, deep-merges tuning over the built-in copy, falls back on errors. | 9 functions, 15 items |
-| [game/src/ops.rs](ops.md) | The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders. | 59 functions, 139 items |
+| [game/src/ops.rs](ops.md) | The game screen: steps the sim, HUD, Time to Loss, crew roster, alerts, log, map overlays (rope links, badges), edge pins, tour, summary, keys and clicks into orders. | 60 functions, 140 items |
 
 ## Around it: data, build, hosting
 
