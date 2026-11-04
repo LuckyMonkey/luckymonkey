@@ -15,5 +15,8 @@ python3 tools/gen-world.py
 rm -rf web/game
 wasm-bindgen --target web --no-typescript --out-dir web/game game/target/wasm32-unknown-unknown/release/luckymonkey.wasm
 mkdir -p web/game/data && cp game/data/*.json web/game/data/
-cp public/sfx.js web/sfx.js
+cp public/sfx.js public/fridge-music.js web/
+# stamp the build on every game file URL so a cached luckymonkey.js never meets a newer wasm (black screen)
+V=$(git rev-parse --short HEAD 2>/dev/null || date +%s)
+sed "s/__V__/$V/g" web/index.template.html > web/index.html
 echo "built: serve web/ (e.g. python3 -m http.server -d web 8080)"
