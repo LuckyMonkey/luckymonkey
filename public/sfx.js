@@ -1,6 +1,6 @@
 // Lucky Monkey sound: tiny synthesized "tech noises" in the spirit of Spybotics:
 // square-wave blips, bit-crushed crunches and quick arpeggios, over jungle music
-// (a warm drone and birds that grow into bongos, cuica and marimba as the threat rises). No audio files. The game calls:
+// (fridge.run's shared music engine, song lucky-monkey-jungle, growing with the threat level). No audio files. The game calls:
 //   lmSfx(name)       one-shot cue (list in CUES below)
 //   lmAmbient(level)  music: 0 = silence .. ~1.5 = cyberstorm (faster, fuller)
 //   lmSfxToggle()     mute/unmute, remembered in this browser; returns true if on
@@ -86,114 +86,44 @@
   }
   window.lmSfx = (name) => { try { CUES[name] && CUES[name]() } catch (e) {} }
 
-  // Music: jungle at night. A warm low drone is the bed (with birds calling
-  // now and then); as the threat rises it grows into a groove: shaker, then
-  // bongos, a friction drum (cuica) and soft marimba, then a low tom pulse.
-  // Notes are scheduled a little ahead on the audio clock.
-  let level = 0, step = 0, nextAt = 0, timer = null, bed = null, nextBird = 0
-  // Am - F - C - G, as roots for the marimba.
-  const CHORDS = [[220, 262, 330], [175, 220, 262], [262, 330, 392], [196, 247, 294]]
-  const MARIMBA = [0, null, 2, null, 1, null, 2, 0]
-  const BONGO = [1, 0, 0, 2, 0, 1, 2, 0, 1, 0, 2, 0, 0, 1, 2, 2]   // 1 low, 2 high
-  function env(g, t, vol, dur, attack = 0.004) {
-    g.gain.setValueAtTime(0.0001, t)
-    g.gain.exponentialRampToValueAtTime(vol, t + attack)
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
-  }
-  function osc(type, f, t, dur, vol, to = null, toAt = dur) {
-    const o = ctx.createOscillator(), g = ctx.createGain()
-    o.type = type; o.frequency.setValueAtTime(f, t)
-    if (to) o.frequency.exponentialRampToValueAtTime(to, t + toAt)
-    env(g, t, vol, dur)
-    o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05)
-  }
-  function noiseAt(t, dur, vol, freq, type = "bandpass", q = 1) {
-    const n = Math.floor(ctx.sampleRate * dur), b = ctx.createBuffer(1, n, ctx.sampleRate), d = b.getChannelData(0)
-    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1
-    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain()
-    s.buffer = b; f.type = type; f.frequency.value = freq; f.Q.value = q
-    env(g, t, vol, dur, 0.003)
-    s.connect(f).connect(g).connect(master); s.start(t)
-  }
-  // Bongo: a skin is a sine that drops in pitch fast, plus a slap of noise.
-  const bongo = (t, high, vol) => { osc("sine", high ? 420 : 280, t, 0.18, vol, high ? 300 : 190, 0.06); noiseAt(t, 0.03, vol * 0.5, high ? 2500 : 1500) }
-  // Cuica: the friction drum's "whoop", a pitch glide up then down.
-  function cuica(t, vol) {
-    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter()
-    o.type = "triangle"; f.type = "bandpass"; f.frequency.value = 900; f.Q.value = 2
-    o.frequency.setValueAtTime(380, t)
-    o.frequency.exponentialRampToValueAtTime(760, t + 0.09)
-    o.frequency.exponentialRampToValueAtTime(420, t + 0.24)
-    env(g, t, vol, 0.26, 0.02)
-    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.3)
-  }
-  // Marimba: a soft sine with a quiet, faster-dying 4th harmonic.
-  const marimba = (t, f, vol) => { osc("sine", f, t, 0.5, vol); osc("sine", f * 4, t, 0.09, vol * 0.25) }
-  const tom = (t, vol) => osc("sine", 110, t, 0.35, vol, 50, 0.25)
-  // Birds: a few chirps that slide up or trill.
-  function bird(t) {
-    const base = 1800 + Math.random() * 1600, n = 2 + Math.floor(Math.random() * 4), trill = Math.random() < 0.4
-    for (let k = 0; k < n; k++) {
-      const at = t + k * (trill ? 0.06 : 0.14)
-      osc("sine", base * (trill ? 1 : 0.8), at, trill ? 0.05 : 0.11, 0.025, base * (trill ? 1.15 : 1.3), trill ? 0.04 : 0.09)
-    }
-  }
-  function ensureBed() {
-    if (bed) return bed
-    const g = ctx.createGain(); g.gain.value = 0
-    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 220; lp.Q.value = 0.7
-    const a = ctx.createOscillator(), b = ctx.createOscillator(), c = ctx.createOscillator()
-    a.type = "sawtooth"; a.frequency.value = 55
-    b.type = "sawtooth"; b.frequency.value = 55.3
-    c.type = "sine"; c.frequency.value = 82.4   // a fifth above, soft
-    const cg = ctx.createGain(); cg.gain.value = 0.4
-    a.connect(lp); b.connect(lp); c.connect(cg).connect(lp)
-    // Slow breathing in the filter so it isn't static.
-    const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 0.07; lg.gain.value = 60
-    lfo.connect(lg).connect(lp.frequency)
-    lp.connect(g).connect(master)
-    ;[a, b, c, lfo].forEach((o) => o.start())
-    bed = { g, lp }
-    return bed
-  }
-  function schedule() {
-    if (!ctx || level <= 0) return
-    const l = level, now = ctx.currentTime
-    const b = ensureBed()
-    b.g.gain.setTargetAtTime(on ? 0.05 + l * 0.02 : 0, now, 1.2)
-    b.lp.frequency.setTargetAtTime(200 + l * 320, now, 1.5)
-    if (!on) return
-    if (now >= nextBird) {
-      bird(now + 0.05)
-      nextBird = now + (l > 0.8 ? 9 : 4) + Math.random() * 7
-    }
-    const bpm = 92 + Math.min(l, 1.4) * 20, sixteenth = 60 / bpm / 4
-    if (nextAt < now) nextAt = now + 0.05
-    while (nextAt < now + 0.25) {
-      const s16 = step % 16, chord = CHORDS[Math.floor(step / 16) % 4], t = nextAt
-      if (l > 0.3 && s16 % 2 === 0) noiseAt(t, 0.05, s16 % 4 === 2 ? 0.02 : 0.012, 6500, "highpass")
-      if (l > 0.45 && BONGO[s16] && (l > 0.8 || s16 % 4 !== 3)) bongo(t, BONGO[s16] === 2, 0.09)
-      if (l > 0.6 && s16 % 2 === 0) {
-        const k = MARIMBA[(s16 / 2) % 8]
-        if (k !== null) marimba(t, chord[k] * 2, 0.05)
+  // Music: the song "lucky-monkey-jungle" on fridge.run's shared music engine (fridge-music.js) - one engine for
+  // fridge.run, go.fridge.run/music (where this song can be played and edited) and this game. The threat level is
+  // the song's intensity: a drone and birds at first, then shaker, bongos, marimba over Am-F-C-G, a cuica and a low
+  // tom, a little faster as it rises. Loaded from fridge.run, with a bundled copy (public/fridge-music.js) offline.
+  const SONG = "lucky-monkey-jungle", VOL = 0.4
+  const BASE = ((document.currentScript && document.currentScript.src) || "").replace(/sfx\.js[^/]*$/, "")
+  let level = 0, loading = null, starting = false
+  function withEngine(fn) {
+    if (window.FridgeMusic) return fn(window.FridgeMusic)
+    if (!loading) loading = new Promise((done) => {
+      const add = (src, otherwise) => {
+        const s = document.createElement("script")
+        s.src = src; s.setAttribute("data-engine-only", "")
+        s.onload = () => done(); s.onerror = otherwise
+        document.head.appendChild(s)
       }
-      if (l > 0.7 && (s16 === 6 || (l > 1 && s16 === 14))) cuica(t, 0.05)
-      if (l > 0.9 && s16 % 8 === 0) tom(t, 0.12)
-      step++
-      nextAt += sixteenth
-    }
+      add("https://fridge.run/fridge-music.js?v=20261103b", () => add(BASE + "fridge-music.js", () => done()))
+    })
+    loading.then(() => { if (window.FridgeMusic) fn(window.FridgeMusic) })
+  }
+  function apply(M) {
+    M.setVolume(VOL, !on)
+    M.setLevel(level)
+    if (level <= 0) { if (M.playing) M.stop(); return }
+    if (starting || (M.playing && M.song && M.song.id === SONG)) return
+    starting = true            // the browser may hold audio until the first click: start once, not once per call
+    M.start(M.songById(SONG)).catch(() => {}).then(() => { starting = false })
   }
   window.lmAmbient = (x) => {
     level = Math.max(0, Math.min(1.5, x || 0))
-    if (!ctx || ctx.state !== "running") return
-    if (!timer) timer = setInterval(schedule, 60)
-    if (level <= 0 && bed) bed.g.gain.setTargetAtTime(0, ctx.currentTime, 0.6)
+    withEngine(apply)
   }
   window.lmSfxToggle = () => {
     on = !on
     window.lmSfxOn = on
     try { localStorage.setItem(KEY, on ? "1" : "0") } catch (e) {}
     if (audio()) master.gain.setTargetAtTime(on ? 0.5 : 0, ctx.currentTime, 0.05)
+    if (window.FridgeMusic) window.FridgeMusic.setVolume(VOL, !on)
     if (on) CUES.select()
     return on
   }

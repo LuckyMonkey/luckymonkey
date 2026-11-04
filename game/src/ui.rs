@@ -3,6 +3,8 @@
 //! Screens and overlays: the welcome gate, zoom HUD, hint bar and node panel.
 
 use bevy::prelude::*;
+use bevy::ui::{ComputedNode, UiScale};
+use bevy::window::PrimaryWindow;
 
 use crate::ops::Game;
 use crate::view::{PointerOverUi, ViewState, ZoomBy};
@@ -57,7 +59,9 @@ const LOAD_SECS: f32 = 0.9;
 pub fn plugin(app: &mut App) {
     app.insert_resource(PanelState { shown: None, tab: Tab::Info, dirty: false, net_version: 0 })
         .add_systems(Startup, spawn_welcome)
-        .add_systems(Update, (welcome, proceed).run_if(in_state(Screen::Welcome)))
+        .add_systems(Update, (welcome, proceed, fit_welcome).run_if(in_state(Screen::Welcome)))
+        // the welcome card may have been shrunk to fit a small window; the game itself runs at normal size
+        .add_systems(OnExit(Screen::Welcome), |mut scale: ResMut<UiScale>| scale.0 = 1.0)
         .add_systems(OnEnter(Screen::Playing), spawn_hud)
         .add_systems(
             Update,
@@ -86,6 +90,7 @@ fn spawn_welcome(mut commands: Commands, art: Res<Art>) {
     let root = commands
         .spawn((
             WelcomeRoot,
+            Interaction::default(),
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -191,6 +196,28 @@ fn spawn_welcome(mut commands: Commands, art: Res<Art>) {
     commands.entity(root).insert(Progress { fill: ids.0, label: ids.1, pct: ids.2, button_label: ids.3 });
 }
 
+/// Shrink the welcome screen until it fits the window, so PROCEED is never below the bottom edge (phones, short
+/// windows: the page can't scroll and the canvas takes every touch). Measures the card and the button as laid out,
+/// compares with the window, and nudges UiScale; back to 1.0 once the game starts.
+fn fit_welcome(
+    mut scale: ResMut<UiScale>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    root: Single<&Children, With<WelcomeRoot>>,
+    nodes: Query<&ComputedNode>,
+) {
+    let need: f32 = root.iter().filter_map(|c| nodes.get(c).ok()).map(|n| n.size().y).sum();
+    if need <= 0.0 {
+        return;
+    }
+    // padding 16 top + 16 bottom and the 16 gap between card and button, in physical pixels at the current scale
+    let chrome = 48.0 * scale.0 * window.scale_factor();
+    let room = window.physical_height() as f32 - chrome;
+    let target = (scale.0 * room / need).clamp(0.45, 1.0);
+    if (target - scale.0).abs() > 0.02 {
+        scale.0 = target;
+    }
+}
+
 fn ready(time: &Time) -> bool {
     time.elapsed_secs() >= LOAD_SECS
 }
@@ -212,7 +239,7 @@ fn welcome(
     }
     if ready(&time) {
         if let Ok((mut t, _)) = texts.get_mut(progress.label) {
-            t.0 = "System ready".into();
+            t.0 = "System ready · tap anywhere or press Enter".into();
         }
         if let Ok((mut t, mut c)) = texts.get_mut(progress.button_label) {
             t.0 = "PROCEED".into();
@@ -228,11 +255,12 @@ fn proceed(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     button: Query<&Interaction, (With<Proceed>, Changed<Interaction>)>,
+    anywhere: Query<&Interaction, (With<WelcomeRoot>, Changed<Interaction>)>,
     root: Single<Entity, With<WelcomeRoot>>,
     mut next: ResMut<NextState<Screen>>,
     link: Res<crate::link::DeepLink>,
 ) {
-    let clicked = button.iter().any(|i| *i == Interaction::Pressed);
+    let clicked = button.iter().chain(anywhere.iter()).any(|i| *i == Interaction::Pressed);
     // A deep link (#node=… etc.) goes straight in.
     if link.active() || (ready(&time) && (clicked || keys.just_pressed(KeyCode::Enter))) {
         commands.entity(*root).despawn();
