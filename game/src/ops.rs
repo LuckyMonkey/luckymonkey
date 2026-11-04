@@ -1173,9 +1173,10 @@ fn theme(game: Res<Game>, mut panels: Query<&mut BorderColor, With<Themed>>, hud
     }
 }
 
-fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Query<&Window>) {
+fn spawn_hud(mut commands: Commands, art: Res<Art>, game: Res<Game>, windows: Query<&Window>, scale: Res<bevy::ui::UiScale>) {
     spawn_setup(&mut commands, &art, &game);
-    let width = windows.iter().next().map_or(1280.0, |w| w.width());
+    // in UI units: a scaled-down HUD on a small window has the room of a bigger one
+    let width = windows.iter().next().map_or(1280.0, |w| crate::ui::ui_width(w, &scale));
     let narrow = width < 760.0;
     // Phones: the Time to Loss timer runs across the top, the column sits under it
     // without the log, and the node panel (ui.rs) keeps to the lower half.

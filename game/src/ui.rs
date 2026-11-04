@@ -60,8 +60,10 @@ pub fn plugin(app: &mut App) {
     app.insert_resource(PanelState { shown: None, tab: Tab::Info, dirty: false, net_version: 0 })
         .add_systems(Startup, spawn_welcome)
         .add_systems(Update, (welcome, proceed, fit_welcome).run_if(in_state(Screen::Welcome)))
-        // the welcome card may have been shrunk to fit a small window; the game itself runs at normal size
-        .add_systems(OnExit(Screen::Welcome), |mut scale: ResMut<UiScale>| scale.0 = 1.0)
+        .init_resource::<UiSize>()
+        // the welcome card may have been shrunk to fit; the game's HUD gets its own size for the window
+        .add_systems(OnExit(Screen::Welcome), fit_game)
+        .add_systems(Update, (ui_size_keys, fit_game).chain().run_if(in_state(Screen::Playing)))
         .add_systems(OnEnter(Screen::Playing), spawn_hud)
         .add_systems(
             Update,
@@ -218,6 +220,48 @@ fn fit_welcome(
     }
 }
 
+/// The player's own UI size on top of the automatic one: [ smaller, ] bigger, \ back to auto.
+#[derive(Resource)]
+pub struct UiSize(pub f32);
+impl Default for UiSize {
+    fn default() -> Self {
+        UiSize(1.0)
+    }
+}
+
+/// HUD scale for a window: the HUD was laid out for roughly 1150x700 CSS px, so shorter or narrower windows (laptops
+/// with browser bars, small screens) shrink it to keep the map visible. Phones (< 600 wide) keep their own layout.
+pub fn game_scale(w: &Window, size: f32) -> f32 {
+    let (wd, ht) = (w.width(), w.height());
+    let auto = if wd < 600.0 { 1.0 } else { (ht / 700.0).min(wd / 1150.0).clamp(0.72, 1.0) };
+    (auto * size).clamp(0.5, 1.6)
+}
+
+/// Window width in UI units (what layout breakpoints should compare against once the UI is scaled).
+pub fn ui_width(w: &Window, scale: &UiScale) -> f32 {
+    w.width() / scale.0.max(0.1)
+}
+
+fn ui_size_keys(keys: Res<ButtonInput<KeyCode>>, mut size: ResMut<UiSize>) {
+    let s = if keys.just_pressed(KeyCode::BracketLeft) {
+        size.0 / 1.1
+    } else if keys.just_pressed(KeyCode::BracketRight) {
+        size.0 * 1.1
+    } else if keys.just_pressed(KeyCode::Backslash) {
+        1.0
+    } else {
+        return;
+    };
+    size.0 = s.clamp(0.6, 1.5);
+}
+
+fn fit_game(mut scale: ResMut<UiScale>, window: Single<&Window, With<PrimaryWindow>>, size: Res<UiSize>) {
+    let target = game_scale(&window, size.0);
+    if (target - scale.0).abs() > 0.01 {
+        scale.0 = target;
+    }
+}
+
 fn ready(time: &Time) -> bool {
     time.elapsed_secs() >= LOAD_SECS
 }
@@ -302,7 +346,7 @@ fn spawn_hud(mut commands: Commands, art: Res<Art>, windows: Query<&Window>) {
         ],
     ));
     let touch = windows.iter().next().is_some_and(|w| w.width() < 768.0);
-    let hint = if touch { "Drag to pan · pinch to zoom · tap a node, pick a fix" } else { "WASD/drag: pan · arrows: hop nodes · Q/E: islands · Space/Tab: alerts · 1-4: respond · H: 🍌 hint · I: diagnose · O: origin · Z-N: crew · P: pause · M: sound" };
+    let hint = if touch { "Drag to pan · pinch to zoom · tap a node, pick a fix" } else { "[ ]: UI size · WASD/drag: pan · arrows: hop nodes · Q/E: islands · Space/Tab: alerts · 1-4: respond · H: 🍌 hint · I: diagnose · O: origin · Z-N: crew · P: pause · M: sound" };
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -423,6 +467,7 @@ fn panel(
     mut state: ResMut<PanelState>,
     roots: Query<Entity, With<PanelRoot>>,
     windows: Query<&Window>,
+    scale: Res<UiScale>,
 ) {
     if state.shown == view.selected && !state.dirty && state.net_version == game.sim.version {
         return;
@@ -439,7 +484,7 @@ fn panel(
     let Some(index) = view.selected.filter(|&i| i < world.nodes.len()) else { return };
     let node = &world.nodes[index];
     let tab = state.tab;
-    let wide = windows.iter().next().is_some_and(|w| w.width() >= 900.0);
+    let wide = windows.iter().next().is_some_and(|w| ui_width(w, &scale) >= 900.0);
 
     commands
         .spawn((
