@@ -6,6 +6,8 @@ import { asset } from "@/lib/asset"
 // The whole game is a Bevy (Rust -> WebAssembly) app in public/game/, built by
 // tools/deploy.sh. This page only hosts its canvas.
 let started = false
+// cache-buster for the game files (next.config.mjs): the glue and the wasm must come from the same build
+const V = `?v=${process.env.NEXT_PUBLIC_GAME_V ?? ""}`
 
 export default function Home() {
   const [error, setError] = useState<string | null>(null)
@@ -20,7 +22,7 @@ export default function Home() {
     }
     // Synthesized sound effects (window.lmSfx, called from game/src/sfx.rs).
     const sfx = document.createElement("script")
-    sfx.src = asset("/sfx.js")
+    sfx.src = asset(`/sfx.js${V}`)
     document.head.appendChild(sfx)
     // Live data: the game reads these JSON files at startup (game/src/data.rs), so
     // they can be edited and redeployed without rebuilding the wasm.
@@ -31,13 +33,13 @@ export default function Home() {
     Promise.all(["world", "npcs", "tuning"].map(async (n) => [n, await load(n)] as const))
       .then((files) => {
         ;(window as unknown as { LM_DATA: Record<string, string | null> }).LM_DATA = Object.fromEntries(files)
-        return import(/* webpackIgnore: true */ asset("/game/luckymonkey.js"))
+        return import(/* webpackIgnore: true */ asset(`/game/luckymonkey.js${V}`))
       })
       .then((game) => {
         // Nothing may sit behind the canvas once the game draws: Firefox composites
         // translucent UI against it (and against stale frames).
         setBooting(false)
-        return game.default({ module_or_path: asset("/game/luckymonkey_bg.wasm") })
+        return game.default({ module_or_path: asset(`/game/luckymonkey_bg.wasm${V}`) })
       })
       .catch((e: unknown) => {
         // winit hands the event loop to the browser by throwing on purpose.

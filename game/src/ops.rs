@@ -2315,15 +2315,22 @@ fn spawn_pins(mut commands: Commands, art: Res<Art>, world: Res<World>) {
 
 /// Nodes out of view turn into their icon, stuck to the screen edge in the
 /// direction they lie; back in view, the pin hides and the card is the node again.
+const ZOOM_BOTTOM: f32 = 140.0;
+const ZOOM_WIDTH: f32 = 60.0;
+
 fn pins(
     game: Res<Game>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
     column: Query<(&HudColumn, &ComputedNode)>,
     mut q: Query<(&EdgePin, &mut Node, &mut BorderColor)>,
+    ui_scale: Res<bevy::ui::UiScale>,
 ) {
     let (cam, cam_tf) = *camera;
-    let size = window.size();
+    // Pins are UI nodes, so everything here is in UI units: window pixels / UiScale. (In window pixels a scaled-down
+    // HUD drew the pin frame as a smaller box inside the screen instead of along its edges.)
+    let s = ui_scale.0.max(0.1);
+    let size = window.size() / s;
     let (lo, hi) = (Vec2::splat(PIN_MARGIN + PIN / 2.0), size - Vec2::new(PIN_MARGIN + PIN / 2.0, 40.0 + PIN / 2.0));
     let centre = (lo + hi) / 2.0;
     let half = (hi - lo) / 2.0;
@@ -2331,6 +2338,7 @@ fn pins(
     let mut edges: [Vec<(usize, f32)>; 4] = Default::default();
     for (pin, _, _) in &q {
         let Ok(p) = cam.world_to_viewport(cam_tf, game.vec(pin.0).extend(0.0)) else { continue };
+        let p = p / s;
         if p.x > -20.0 && p.y > -20.0 && p.x < size.x + 20.0 && p.y < size.y + 20.0 {
             continue;
         }
@@ -2358,8 +2366,9 @@ fn pins(
     for (k, list) in edges.iter_mut().enumerate() {
         let (min, max) = match k {
             0 => ((col_bottom + 8.0 + PIN / 2.0).max(lo.y), hi.y),
-            1 => (lo.y, hi.y),
-            2 => ((col_right + 8.0 + PIN / 2.0).max(lo.x), hi.x),
+            // the zoom buttons (ui.rs: top 16, right 16, about 44 wide and 130 tall) own the top-right corner
+            1 => ((ZOOM_BOTTOM + 8.0 + PIN / 2.0).max(lo.y), hi.y),
+            2 => ((col_right + 8.0 + PIN / 2.0).max(lo.x), hi.x.min(size.x - ZOOM_WIDTH - 8.0 - PIN / 2.0)),
             _ => (lo.x, hi.x),
         };
         let min = min.min(max);

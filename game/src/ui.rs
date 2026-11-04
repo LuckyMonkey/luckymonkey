@@ -230,10 +230,18 @@ impl Default for UiSize {
 }
 
 /// HUD scale for a window: the HUD was laid out for roughly 1150x700 CSS px, so shorter or narrower windows (laptops
-/// with browser bars, small screens) shrink it to keep the map visible. Phones (< 600 wide) keep their own layout.
+/// with browser bars, small screens) shrink it to keep the map visible, big screens grow it. Phones (< 600 wide) keep
+/// their own layout.
 pub fn game_scale(w: &Window, size: f32) -> f32 {
     let (wd, ht) = (w.width(), w.height());
-    let auto = if wd < 600.0 { 1.0 } else { (ht / 700.0).min(wd / 1150.0).clamp(0.72, 1.0) };
+    let auto = if wd < 600.0 {
+        1.0
+    } else if ht >= 1000.0 && wd >= 1700.0 {
+        // big screens (1440p and up): grow the HUD so it stays readable instead of a strip in the corner
+        (ht / 1000.0).min(wd / 1700.0).clamp(1.0, 1.5)
+    } else {
+        (ht / 700.0).min(wd / 1150.0).clamp(0.72, 1.0)
+    };
     (auto * size).clamp(0.5, 1.6)
 }
 
